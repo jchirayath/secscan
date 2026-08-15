@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go vet ./...
+      - run: go test ./...
+      # GitHub's own secret scanning needs Advanced Security on a private repo,
+      # so the equivalent runs here instead — including over history, which a
+      # working-tree scan would miss.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: ./ci/guards.sh
+      - run: go build -o secscan ./cmd/secscan

@@ -1,0 +1,60 @@
+{
+          "clientProblem1" : [
+                            {
+                                "id"           : "engine_problem",
+                                "severity"     : "WARN",
+                                "finding"      : "No engine or GOST support via engine with your /opt/testssl.sh/bin/openssl.Linux.x86_64"
+                           }
+          ],
+          "Invocation"  : "testssl.sh --jsonfile-pretty /tmp/tmp.KejP5PYs0z --quiet --severity MEDIUM https://app.example.net",
+          "at"          : "host:/opt/testssl.sh/bin/openssl.Linux.x86_64",
+          "version"     : "3.2.4 ",
+          "openssl"     : "OpenSSL 1.0.2-bad from Fri Mar 28 16:54:51 2025",
+          "startTime"   : "1786488388",
+          "scanResult"  : [
+          {
+                    "targetHost"      : "app.example.net",
+                    "ip"              : "198.51.100.7",
+                    "port"            : "443",
+                    "rDNS"            : "host.example.net.",
+                    "service"         : "HTTP",
+                    "pretest"           : [
+
+                    ],
+                    "protocols"         : [
+
+                    ],
+                    "grease"            : [
+
+                    ],
+                    "ciphers"           : [
+
+                    ],
+                    "serverPreferences" : [
+
+                    ],
+                    "fs"                : [
+
+                    ],
+                    "serverDefaults"    : [
+
+                    ],
+                    "headerResponse"    : [
+
+                    ],
+                    "vulnerabilities"   : [
+
+                    ],
+                    "cipherTests"       : [
+
+                    ],
+                    "browserSimulations": [
+
+                    ],
+                    "rating"            : [
+
+                    ]
+          }
+          ],
+                    "scanTime"  : 52
+}

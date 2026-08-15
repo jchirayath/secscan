@@ -1,0 +1,388 @@
+// Package engine wraps optional external scanners.
+//
+// Every engine is optional and auto-detected. A missing engine yields an
+// explicit Status saying so — never a silent gap. The native collectors in
+// package collect remain the primary source of findings (ARCHITECTURE.md — Collectors and engines).
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/jchirayath/secscan/internal/clock"
+	"github.com/jchirayath/secscan/internal/core/exec"
+	"github.com/jchirayath/secscan/internal/core/finding"
+)
+
+// Status reports whether an engine ran, and if not, why.
+type Status struct {
+	ID        string `json:"id"`
+	Installed bool   `json:"installed"`
+	Ran       bool   `json:"ran"`
+	Found     int    `json:"found"`
+	Reason    string `json:"reason,omitempty"`
+	Install   string `json:"install,omitempty"` // how to get it
+}
+
+// Enablement answers whether a feature should run. Defined here as a narrow
+// interface so package engine does not import package feature and create a
+// cycle.
+type Enablement interface{ IsEnabled(id string) bool }
+
+// Engine is an optional external scanner.
+type Engine interface {
+	ID() string
+	Binary() string
+	InstallHint() string
+	Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error)
+}
+
+// Expensive is implemented by engines whose runtime is measured in tens of
+// minutes rather than seconds.
+//
+// This exists because of a concrete measurement: nuclei against a single host
+// with 13,510 templates, rate-limited to a level that is safe to point at
+// production, ran for over eight minutes without finishing. An engine like that
+// cannot be in the default scan — not because it is not valuable, but because a
+// scan that takes twenty minutes gets run monthly instead of nightly, and a
+// monthly scan is how you find out about something six weeks late.
+//
+// Expensive engines are therefore OFF by default and say why, rather than being
+// silently omitted or silently making every scan slow.
+type Expensive interface {
+	// WhyExpensive explains the cost in the operator's terms, shown in the UI
+	// next to the toggle.
+	WhyExpensive() string
+}
+
+// IsExpensive reports whether an engine opts out of the default scan.
+func IsExpensive(e Engine) (string, bool) {
+	if x, ok := e.(Expensive); ok {
+		return x.WhyExpensive(), true
+	}
+	return "", false
+}
+
+// All returns every known engine adapter.
+func All() []Engine {
+	return []Engine{Trivy{}, TrivyImage{}, Gitleaks{}, OSVScanner{}, TestSSL{}, Nuclei{}}
+}
+
+// RunAll executes every installed engine, returning findings and per-engine
+// status. An engine that errors degrades to a status entry — one broken tool
+// never fails the scan.
+func RunAll(ctx context.Context, r exec.Runner, a *finding.Asset, enabled Enablement) ([]finding.Finding, []Status) {
+	var out []finding.Finding
+	var statuses []Status
+
+	for _, e := range All() {
+		st := Status{ID: e.ID(), Install: e.InstallHint()}
+		if enabled != nil && !enabled.IsEnabled(e.ID()) {
+			if why, costly := IsExpensive(e); costly {
+				st.Reason = "not enabled — " + why
+			} else {
+				st.Reason = "disabled by operator"
+			}
+			statuses = append(statuses, st)
+			continue
+		}
+		if !r.Has(ctx, e.Binary()) {
+			st.Reason = e.Binary() + " not installed on the target"
+			statuses = append(statuses, st)
+			continue
+		}
+		st.Installed = true
+		fs, err := e.Run(ctx, r, a)
+		if err != nil {
+			st.Reason = "engine failed: " + err.Error()
+			statuses = append(statuses, st)
+			continue
+		}
+		st.Ran, st.Found = true, len(fs)
+		out = append(out, fs...)
+		statuses = append(statuses, st)
+	}
+	return out, statuses
+}
+
+// severityFrom maps an engine's severity vocabulary onto ours.
+func severityFrom(s string) finding.Severity {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "CRITICAL":
+		return finding.SevCritical
+	case "HIGH":
+		return finding.SevHigh
+	case "MEDIUM", "MODERATE":
+		return finding.SevMedium
+	case "LOW":
+		return finding.SevLow
+	}
+	return finding.SevInfo
+}
+
+// ------------------------------------------------------------------- Trivy
+
+// Trivy scans the root filesystem for OS-package and language-dependency CVEs.
+// It is the highest-value optional engine: one binary covers what would
+// otherwise be several.
+type Trivy struct{}
+
+func (Trivy) ID() string     { return "trivy" }
+func (Trivy) Binary() string { return "trivy" }
+func (Trivy) InstallHint() string {
+	return "https://aquasecurity.github.io/trivy — `brew install trivy` or the distro package"
+}
+
+type trivyReport struct {
+	Results []struct {
+		Target          string `json:"Target"`
+		Type            string `json:"Type"`
+		Vulnerabilities []struct {
+			VulnerabilityID  string `json:"VulnerabilityID"`
+			PkgName          string `json:"PkgName"`
+			InstalledVersion string `json:"InstalledVersion"`
+			FixedVersion     string `json:"FixedVersion"`
+			Severity         string `json:"Severity"`
+			Title            string `json:"Title"`
+			Description      string `json:"Description"`
+			PrimaryURL       string `json:"PrimaryURL"`
+			CVSS             map[string]struct {
+				V3Score float64 `json:"V3Score"`
+			} `json:"CVSS"`
+		} `json:"Vulnerabilities"`
+	} `json:"Results"`
+}
+
+func (t Trivy) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
+	now := clock.Now()
+	// Measured on a stock Ubuntu 24.04 host: CRITICAL,HIGH,MEDIUM including
+	// unfixed returns 35,326 vulnerabilities, of which 77 have a fix available.
+	// The other 99.8% are kernel CVEs the operator cannot action — no patch
+	// exists — and they bury the ones a single `apt upgrade` would close.
+	// Tightening to fixable CRITICAL/HIGH gives 33.
+	//
+	// The cost is stated rather than hidden: an unfixed CRITICAL is still real
+	// risk, and this engine will not report it. That trade is worth making
+	// because a 35,000-row report is not read at all, but it is a trade.
+	res := r.Run(ctx, "trivy", "rootfs", "--quiet", "--scanners", "vuln",
+		"--format", "json", "--severity", "CRITICAL,HIGH", "--ignore-unfixed", "/")
+	if res.Err != nil {
+		return nil, res.Err
+	}
+	if strings.TrimSpace(res.Stdout) == "" {
+		return nil, fmt.Errorf("no output (exit %d): %s", res.ExitCode, firstLine(res.Stderr))
+	}
+
+	var rep trivyReport
+	if err := json.Unmarshal([]byte(res.Stdout), &rep); err != nil {
+		return nil, fmt.Errorf("parse trivy json: %w", err)
+	}
+
+	var out []finding.Finding
+	// The same CVE is reported once per source package that ships the affected
+	// binary, so a single kernel issue can appear a dozen times with identical
+	// text. Collapse on CVE+package: the operator fixes it once.
+	seen := map[string]bool{}
+	for _, result := range rep.Results {
+		for _, v := range result.Vulnerabilities {
+			key := v.VulnerabilityID + "|" + v.PkgName
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			sev := severityFrom(v.Severity)
+			title := v.Title
+			if title == "" {
+				title = fmt.Sprintf("%s in %s", v.VulnerabilityID, v.PkgName)
+			}
+			f := finding.New(a.ID, categoryForTrivy(result.Type), sev,
+				"vuln."+strings.ToLower(v.VulnerabilityID), title, now)
+			f.Description = v.Description
+			f.Subcategory = result.Type
+			f.Engine = t.ID()
+			f.CVE = []string{v.VulnerabilityID}
+			for _, c := range v.CVSS {
+				if c.V3Score > f.CVSS {
+					f.CVSS = c.V3Score
+				}
+			}
+			if v.PrimaryURL != "" {
+				f.References = []string{v.PrimaryURL}
+			}
+			f.Evidence = []finding.Evidence{{
+				Command: res.Command,
+				Output: fmt.Sprintf("%s: %s %s → fixed in %s (%s)",
+					v.VulnerabilityID, v.PkgName, v.InstalledVersion,
+					orNone(v.FixedVersion), result.Target),
+			}}
+			if v.FixedVersion != "" {
+				f.Remediation = finding.Remediation{Op: "apply_patch",
+					Summary: fmt.Sprintf("Upgrade %s to %s", v.PkgName, v.FixedVersion)}
+			} else {
+				f.Remediation = finding.Remediation{Op: "manual",
+					Summary: fmt.Sprintf("No fix published for %s yet — mitigate or accept", v.VulnerabilityID)}
+			}
+			comp := finding.Component{Name: v.PkgName, Version: v.InstalledVersion, FixedVersion: v.FixedVersion}
+			out = append(out, f.WithLocation(result.Target, comp))
+		}
+	}
+	return out, nil
+}
+
+func categoryForTrivy(typ string) finding.Category {
+	switch strings.ToLower(typ) {
+	case "debian", "ubuntu", "alpine", "redhat", "centos", "rocky", "amazon", "oracle", "suse":
+		return finding.CatPatch
+	}
+	return finding.CatDeps
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(no fix)"
+	}
+	return s
+}
+
+// ---------------------------------------------------------------- Gitleaks
+
+// Gitleaks finds committed credentials. Scoped to the target's home and /opt
+// rather than the whole filesystem — a full-root secret scan on a busy server
+// takes long enough that people stop running it.
+type Gitleaks struct{}
+
+func (Gitleaks) ID() string     { return "gitleaks" }
+func (Gitleaks) Binary() string { return "gitleaks" }
+func (Gitleaks) InstallHint() string {
+	return "https://github.com/gitleaks/gitleaks — `brew install gitleaks`"
+}
+
+type gitleaksFinding struct {
+	Description string `json:"Description"`
+	File        string `json:"File"`
+	StartLine   int    `json:"StartLine"`
+	RuleID      string `json:"RuleID"`
+	Secret      string `json:"Secret"`
+}
+
+func (g Gitleaks) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
+	now := clock.Now()
+	res := r.Run(ctx, "gitleaks", "dir", "/opt", "--no-banner", "--report-format", "json", "--report-path", "/dev/stdout")
+	if res.Err != nil {
+		return nil, res.Err
+	}
+	body := strings.TrimSpace(res.Stdout)
+	if body == "" || body == "[]" {
+		return nil, nil
+	}
+	var hits []gitleaksFinding
+	if err := json.Unmarshal([]byte(body), &hits); err != nil {
+		return nil, fmt.Errorf("parse gitleaks json: %w", err)
+	}
+
+	var out []finding.Finding
+	for _, h := range hits {
+		f := finding.New(a.ID, finding.CatSecrets, finding.SevHigh,
+			"secrets."+strings.ToLower(h.RuleID),
+			"Credential in "+h.File, now)
+		f.Description = h.Description
+		f.Engine = g.ID()
+		// The secret itself is never stored — only enough to locate it.
+		f.Evidence = []finding.Evidence{{
+			Path:   h.File,
+			Output: fmt.Sprintf("line %d — rule %s (value redacted)", h.StartLine, h.RuleID),
+		}}
+		f.Remediation = finding.Remediation{Op: "rotate_secret",
+			Summary: "Rotate this credential, then remove it from the file and from history"}
+		out = append(out, f.WithLocation(fmt.Sprintf("%s:%d", h.File, h.StartLine), finding.Component{}))
+	}
+	return out, nil
+}
+
+// -------------------------------------------------------------- OSVScanner
+
+// OSVScanner checks language lockfiles against the OSV database — an
+// independent second opinion to Trivy's dependency coverage.
+type OSVScanner struct{}
+
+func (OSVScanner) ID() string     { return "osv-scanner" }
+func (OSVScanner) Binary() string { return "osv-scanner" }
+func (OSVScanner) InstallHint() string {
+	return "https://google.github.io/osv-scanner — `brew install osv-scanner`"
+}
+
+type osvReport struct {
+	Results []struct {
+		Source struct {
+			Path string `json:"path"`
+		} `json:"source"`
+		Packages []struct {
+			Package struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"package"`
+			Vulnerabilities []struct {
+				ID      string   `json:"id"`
+				Summary string   `json:"summary"`
+				Aliases []string `json:"aliases"`
+			} `json:"vulnerabilities"`
+		} `json:"packages"`
+	} `json:"results"`
+}
+
+func (o OSVScanner) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
+	now := clock.Now()
+	res := r.Run(ctx, "osv-scanner", "scan", "--format", "json", "--recursive", "/opt")
+	if res.Err != nil {
+		return nil, res.Err
+	}
+	body := strings.TrimSpace(res.Stdout)
+	if body == "" {
+		return nil, nil
+	}
+	var rep osvReport
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		return nil, fmt.Errorf("parse osv-scanner json: %w", err)
+	}
+
+	var out []finding.Finding
+	for _, result := range rep.Results {
+		for _, p := range result.Packages {
+			for _, v := range p.Vulnerabilities {
+				f := finding.New(a.ID, finding.CatDeps, finding.SevMedium,
+					"deps."+strings.ToLower(v.ID),
+					fmt.Sprintf("%s in %s", v.ID, p.Package.Name), now)
+				f.Description = v.Summary
+				f.Engine = o.ID()
+				f.CVE = cvesOf(v.Aliases)
+				f.References = []string{"https://osv.dev/vulnerability/" + v.ID}
+				f.Evidence = []finding.Evidence{{Command: res.Command,
+					Output: fmt.Sprintf("%s %s in %s", p.Package.Name, p.Package.Version, result.Source.Path)}}
+				f.Remediation = finding.Remediation{Op: "apply_patch",
+					Summary: fmt.Sprintf("Update %s beyond %s", p.Package.Name, p.Package.Version)}
+				out = append(out, f.WithLocation(result.Source.Path,
+					finding.Component{Name: p.Package.Name, Version: p.Package.Version}))
+			}
+		}
+	}
+	return out, nil
+}
+
+func cvesOf(aliases []string) []string {
+	var out []string
+	for _, a := range aliases {
+		if strings.HasPrefix(a, "CVE-") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func firstLine(s string) string {
+	if i := strings.Index(s, "\n"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
+}

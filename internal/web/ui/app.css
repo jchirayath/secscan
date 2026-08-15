@@ -1,0 +1,375 @@
+/* secscan dashboard.
+ *
+ * Design tokens are declared once in :root (ARCHITECTURE.md — Constraints) so the whole
+ * console reads as one product. Never a hex literal outside :root —
+ * ci/guards.sh enforces it. Dark mode is a token swap, nothing else.
+ */
+
+:root {
+  --brand: 37 99 235;
+  --brand-2: 29 78 216;
+  --accent: 99 102 241;
+  --accent-2: 139 92 246;
+  --accent-3: 14 165 233;
+
+  --bg: 249 250 251;
+  --surface: 255 255 255;
+  --surface-2: 243 244 246;
+  --surface-3: 229 231 235;
+  --border: 209 213 219;
+
+  --ink: 17 24 39;
+  --muted: 107 114 128;
+
+  --good: 22 163 74;
+  --warn: 217 119 6;
+  --bad: 220 38 38;
+  --info: 2 132 199;
+  --on-accent: 255 255 255;
+
+  --radius: 10px;
+  --gap: 16px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+
+html.dark {
+  --bg: 9 12 18;
+  --surface: 20 25 34;
+  --surface-2: 28 34 45;
+  --surface-3: 38 45 58;
+  --border: 52 60 74;
+
+  --ink: 231 235 241;
+  --muted: 148 157 172;
+
+  --good: 74 222 128;
+  --warn: 251 191 36;
+  --bad: 248 113 113;
+  --info: 56 189 248;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgb(var(--ink));
+  background: rgb(var(--bg));
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: rgb(var(--brand)); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------------------------------------------------------------- layout */
+
+header.top {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: var(--gap);
+  padding: 12px 20px;
+  background: rgb(var(--surface));
+  border-bottom: 1px solid rgb(var(--border));
+}
+
+.logo { font-weight: 700; letter-spacing: -0.02em; font-size: 15px; }
+.logo span { color: rgb(var(--muted)); font-weight: 400; }
+
+nav.tabs { display: flex; gap: 4px; margin-left: 8px; flex-wrap: wrap; }
+
+nav.tabs button {
+  border: 0; background: transparent; cursor: pointer;
+  color: rgb(var(--muted)); font: inherit;
+  padding: 6px 12px; border-radius: var(--radius);
+}
+nav.tabs button:hover { background: rgb(var(--surface-2)); color: rgb(var(--ink)); }
+nav.tabs button[aria-current="page"] {
+  background: rgb(var(--brand) / 0.12); color: rgb(var(--brand)); font-weight: 600;
+}
+
+.spacer { flex: 1; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgb(var(--surface-2)); color: rgb(var(--muted));
+  font-size: 12px; border: 1px solid rgb(var(--border));
+}
+
+button.ghost {
+  border: 1px solid rgb(var(--border)); background: rgb(var(--surface));
+  color: rgb(var(--ink)); font: inherit; cursor: pointer;
+  padding: 6px 12px; border-radius: var(--radius);
+}
+button.ghost:hover { background: rgb(var(--surface-2)); }
+button.ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.primary {
+  border: 0; background: rgb(var(--brand)); color: rgb(var(--on-accent));
+  font: inherit; font-weight: 600; cursor: pointer;
+  padding: 7px 14px; border-radius: var(--radius);
+}
+button.primary:hover { background: rgb(var(--brand-2)); }
+button.primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+main { padding: 20px; max-width: 1280px; margin: 0 auto; }
+
+/* ------------------------------------------------------------- provenance */
+
+.banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: var(--gap);
+  border-radius: var(--radius);
+  border: 1px solid rgb(var(--warn) / 0.35);
+  background: rgb(var(--warn) / 0.1);
+  color: rgb(var(--warn));
+  font-size: 13px;
+}
+.banner.bad { border-color: rgb(var(--bad) / 0.35); background: rgb(var(--bad) / 0.1); color: rgb(var(--bad)); }
+.banner.info { border-color: rgb(var(--info) / 0.35); background: rgb(var(--info) / 0.1); color: rgb(var(--info)); }
+
+/* ------------------------------------------------------------------ cards */
+
+.card {
+  background: rgb(var(--surface));
+  border: 1px solid rgb(var(--border));
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.grid { display: grid; gap: var(--gap); }
+.grid.cats { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.grid.top { grid-template-columns: 260px 1fr; align-items: start; }
+@media (max-width: 860px) { .grid.top { grid-template-columns: 1fr; } }
+
+/* score dial */
+.score { text-align: center; }
+.score .n { font-size: 48px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+.score .label { color: rgb(var(--muted)); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.score .n.good { color: rgb(var(--good)); }
+.score .n.warn { color: rgb(var(--warn)); }
+.score .n.bad  { color: rgb(var(--bad)); }
+
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 40px; margin-top: 12px; }
+.spark i { flex: 1; background: rgb(var(--brand) / 0.35); border-radius: 2px 2px 0 0; min-height: 2px; }
+.spark i:last-child { background: rgb(var(--brand)); }
+
+/* category tile */
+.tile {
+  cursor: pointer; text-align: left; width: 100%; font: inherit;
+  background: rgb(var(--surface)); color: rgb(var(--ink));
+  border: 1px solid rgb(var(--border)); border-radius: var(--radius);
+  padding: 14px; transition: border-color .12s, transform .12s;
+}
+.tile:hover { border-color: rgb(var(--brand)); transform: translateY(-1px); }
+.tile h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.tile .total { color: rgb(var(--muted)); font-size: 12px; }
+.tile .bars { display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ------------------------------------------------------------------ badge */
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.badge.critical { background: rgb(var(--bad) / 0.14); color: rgb(var(--bad)); border-color: rgb(var(--bad) / 0.3); }
+.badge.high     { background: rgb(var(--warn) / 0.14); color: rgb(var(--warn)); border-color: rgb(var(--warn) / 0.3); }
+.badge.medium   { background: rgb(var(--info) / 0.14); color: rgb(var(--info)); border-color: rgb(var(--info) / 0.3); }
+.badge.low      { background: rgb(var(--surface-3)); color: rgb(var(--muted)); }
+.badge.info     { background: rgb(var(--surface-2)); color: rgb(var(--muted)); }
+.badge.exposed  { background: rgb(var(--bad) / 0.14); color: rgb(var(--bad)); border-color: rgb(var(--bad) / 0.3); }
+.badge.ok       { background: rgb(var(--good) / 0.14); color: rgb(var(--good)); border-color: rgb(var(--good) / 0.3); }
+
+/* ------------------------------------------------------------------ table */
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgb(var(--border)); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: rgb(var(--muted)); font-weight: 600; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: rgb(var(--surface-2)); }
+td.risk { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+td.title { width: 100%; }
+td.title small { display: block; color: rgb(var(--muted)); font-size: 12px; margin-top: 2px; }
+
+/* ----------------------------------------------------------------- detail */
+
+.detail h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -0.02em; }
+.detail .meta { color: rgb(var(--muted)); font-size: 13px; margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.detail section { margin-top: 20px; }
+.detail h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: rgb(var(--muted)); }
+
+pre.evidence {
+  margin: 0; padding: 12px; overflow-x: auto;
+  background: rgb(var(--surface-2)); border: 1px solid rgb(var(--border));
+  border-radius: var(--radius);
+  font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+pre.evidence .cmd { color: rgb(var(--muted)); display: block; margin-bottom: 6px; }
+
+.factors { display: flex; gap: 8px; flex-wrap: wrap; }
+.factor {
+  border: 1px solid rgb(var(--border)); border-radius: var(--radius);
+  padding: 8px 12px; background: rgb(var(--surface-2)); font-size: 12px;
+}
+.factor b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.factor small { color: rgb(var(--muted)); }
+
+.fix {
+  border-left: 3px solid rgb(var(--good)); background: rgb(var(--good) / 0.07);
+  padding: 12px 14px; border-radius: 0 var(--radius) var(--radius) 0;
+}
+.fix code {
+  display: block; margin-top: 8px; font-family: var(--mono); font-size: 12px;
+  background: rgb(var(--surface-2)); padding: 8px 10px; border-radius: 6px;
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+}
+
+/* ------------------------------------------------------------------ misc */
+
+.muted { color: rgb(var(--muted)); }
+.right { text-align: right; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mb { margin-bottom: var(--gap); }
+h1.page { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.02em; }
+p.sub { color: rgb(var(--muted)); margin: 0 0 16px; }
+
+.empty { text-align: center; padding: 48px 20px; color: rgb(var(--muted)); }
+.empty h3 { color: rgb(var(--ink)); margin: 0 0 6px; }
+
+.skip { font-family: var(--mono); font-size: 12px; }
+.skip li { margin-bottom: 6px; }
+
+select, input[type=text], input[type=number], textarea {
+  font: inherit; color: rgb(var(--ink)); background: rgb(var(--surface));
+  border: 1px solid rgb(var(--border)); border-radius: var(--radius); padding: 6px 10px;
+}
+
+dialog {
+  border: 1px solid rgb(var(--border)); border-radius: var(--radius);
+  background: rgb(var(--surface)); color: rgb(var(--ink));
+  padding: 20px; max-width: 480px; width: 90%;
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.5); }
+
+/* ---------------------------------------------------------------- utility
+ * The CSP forbids inline style attributes (style-src 'self'), which is the
+ * point — it means a missed escape cannot smuggle in a style-based attack.
+ * These classes replace what would otherwise be style="…".
+ */
+.w-full { width: 100%; }
+.mt-0 { margin-top: 0; }
+.mb-10 { margin-bottom: 10px; }
+.mb-16 { margin-bottom: 16px; }
+.fs-13 { font-size: 13px; }
+.fs-12 { font-size: 12px; }
+.block { display: block; }
+.end { justify-content: flex-end; }
+.dlg-help { margin-top: 0; font-size: 13px; }
+
+/* checks table: description under the label, comfortable checkbox hit area */
+td small { display: block; color: rgb(var(--muted)); font-size: 12px; margin-top: 4px; max-width: 62ch; }
+input[type=checkbox] { width: 16px; height: 16px; accent-color: rgb(var(--brand)); cursor: pointer; }
+input[type=checkbox]:disabled { cursor: not-allowed; opacity: .5; }
+label.row { cursor: pointer; }
+
+/* risk chain: inherent -> controls -> residual */
+td.risk .inherent {
+  display: block; font-size: 11px; font-weight: 400;
+  color: rgb(var(--muted)); text-decoration: line-through;
+}
+.chain {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 12px;
+  background: rgb(var(--surface-2)); border: 1px solid rgb(var(--border));
+  border-radius: var(--radius);
+}
+.chain-n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chain-n.mult { color: rgb(var(--good)); }
+.chain-n.residual { color: rgb(var(--brand)); }
+.chain-op { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: rgb(var(--muted)); }
+.chain-arrow { color: rgb(var(--muted)); }
+.control {
+  border-left: 3px solid rgb(var(--good)); background: rgb(var(--good) / 0.06);
+  padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin-bottom: 8px;
+}
+.limits { margin-top: 6px; font-size: 12px; color: rgb(var(--warn)); }
+
+/* compensating-control chips */
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.badge.control {
+  background: rgb(var(--good) / 0.12); color: rgb(var(--good));
+  border-color: rgb(var(--good) / 0.3); cursor: help; font-weight: 500;
+}
+.mt-16 { margin-top: 16px; }
+
+/* validation verdicts */
+.badge.confirmed { background: rgb(var(--bad) / 0.14); color: rgb(var(--bad)); border-color: rgb(var(--bad) / 0.35); }
+.badge.refuted   { background: rgb(var(--surface-3)); color: rgb(var(--muted)); }
+.fix.refuted-box { border-left-color: rgb(var(--muted)); background: rgb(var(--surface-2)); }
+
+/* summary scorecard */
+td small.skipreason {
+  color: rgb(var(--warn)); font-family: var(--mono); font-size: 11px; margin-top: 4px;
+}
+
+/* command transcript */
+pre.evidence.step { margin-bottom: 8px; }
+pre.evidence .exit { margin-left: 10px; font-size: 11px; }
+pre.evidence .exit.ok  { color: rgb(var(--good)); }
+pre.evidence .exit.bad { color: rgb(var(--warn)); }
+pre.evidence .ms { margin-left: 8px; font-size: 11px; color: rgb(var(--muted)); }
+pre.evidence .redacted { color: rgb(var(--warn)); font-style: italic; }
+
+/* inline link-styled buttons, so navigation reads as text not chrome */
+button.linklike {
+  border: 0; background: none; padding: 0; font: inherit;
+  color: rgb(var(--brand)); cursor: pointer; text-align: left;
+}
+button.linklike:hover { text-decoration: underline; }
+td button.linklike { font-weight: 700; }
+
+/* expensive checks: the reason sits with the toggle, not in a footnote */
+td small.costly { color: rgb(var(--warn)); margin-top: 6px; }
+
+/* a finding that occurs in several places, collapsed for display */
+.badge.multi { margin-left: 8px; }
+
+/* posture-over-time chart */
+.trend { display: flex; align-items: flex-end; gap: 3px; height: 120px; }
+.tcol { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.tbar { border-radius: 2px 2px 0 0; min-height: 2px; background: rgb(var(--brand)); }
+.tbar.good { background: rgb(var(--good)); }
+.tbar.warn { background: rgb(var(--warn)); }
+.tbar.bad  { background: rgb(var(--bad)); }
+.tcov { height: 3px; margin-top: 2px; background: rgb(var(--muted) / 0.6); border-radius: 2px; }
+.trend-axis { display: flex; justify-content: space-between; color: rgb(var(--muted)); font-size: 11px; margin-top: 6px; }
+.difflist { margin: 0; padding-left: 18px; }
+.difflist li { margin-bottom: 4px; }
+td small { display: block; }
+
+/* ---- change-risk of applying a fix ----
+   Green/amber/red here rate the CHANGE, not the finding, so they deliberately
+   do not reuse the severity palette: a red severity badge and a red change-risk
+   badge sitting in the same page would read as the same scale. */
+.badge.risk-green { background: rgb(var(--good) / 0.14); color: rgb(var(--good)); border-color: rgb(var(--good) / 0.35); }
+.badge.risk-amber { background: rgb(var(--warn) / 0.14); color: rgb(var(--warn)); border-color: rgb(var(--warn) / 0.35); }
+.badge.risk-red   { background: rgb(var(--bad) / 0.14);  color: rgb(var(--bad));  border-color: rgb(var(--bad) / 0.35); }
+.fix.risk-green { border-left: 3px solid rgb(var(--good) / 0.5); }
+.fix.risk-amber { border-left: 3px solid rgb(var(--warn) / 0.5); }
+.fix.risk-red   { border-left: 3px solid rgb(var(--bad) / 0.5); }
+
+button.ghost.danger { color: rgb(var(--bad)); border-color: rgb(var(--bad) / 0.4); }
+button.ghost.danger:hover { background: rgb(var(--bad) / 0.1); }
+
+table.steps { width: 100%; border-collapse: collapse; margin-top: 8px; }
+table.steps td { padding: 3px 6px; vertical-align: top; font-size: 13px; }
+table.steps td:first-child { width: 14px; }
+table.steps td:nth-child(2) { width: 68px; }
+/* Commands can be long and must not widen the page; they wrap instead. */
+table.steps code { display: block; white-space: pre-wrap; word-break: break-all; }
+b.good { color: rgb(var(--good)); }
+b.bad, p.bad, span.bad { color: rgb(var(--bad)); }

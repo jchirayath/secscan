@@ -1,0 +1,41 @@
+# Build output
+/secscan
+/dist/
+*.test
+
+# Scanner output — NEVER commit this.
+#
+# A snapshot or state file is a complete map of a host's weaknesses: open
+# findings, exposed ports, weak accounts, the command transcripts behind them.
+# Committing one is a worse disclosure than any credential this repo could
+# leak, and it is easy to do by accident by pointing SECSCAN_HOME at the
+# working directory. ci/guards.sh fails the build if any of these appear.
+/state.json
+/history.jsonl
+/audit.jsonl
+/snapshots/
+/data/
+*.snapshot.json
+*-assessment.md
+secscan-report*.md
+
+# Local configuration. Every setting is an environment variable (see
+# .env.example, generated from the config registry), so a local .env is the
+# natural place to keep a session secret or an Entra client secret.
+.env
+.env.*
+!.env.example
+.envrc
+
+# Site-specific disclosure denylist: names of real hosts or internal projects
+# that do not look like domains and so cannot be caught generically. Gitignored
+# on purpose — a committed denylist publishes exactly the inventory it defends.
+/ci/disclosure-denylist.local
+
+# Keys and certificates, in case one is ever dropped here while testing
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+.DS_Store

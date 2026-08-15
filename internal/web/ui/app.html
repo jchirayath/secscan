@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secscan</title>
+<link rel="stylesheet" href="/app.css?v=__VERSION__">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128737;</text></svg>">
+</head>
+<body>
+<header class="top">
+  <div class="logo">secscan <span id="version"></span></div>
+  <nav class="tabs" id="tabs"></nav>
+  <div class="spacer"></div>
+  <button class="ghost" id="scanBtn" title="Run a scan now">Scan</button>
+  <span class="chip" id="who"></span>
+  <button class="ghost" id="theme" title="Toggle light/dark" aria-label="Toggle theme">◐</button>
+</header>
+
+<main id="app">
+  <div class="empty"><h3>Loading…</h3></div>
+</main>
+
+<dialog id="suppressDlg">
+  <h3 class="mt-0">Accept this risk</h3>
+  <p class="muted dlg-help">
+    Both fields are required. An accepted risk with no reason is
+    indistinguishable from an ignored one, and one with no expiry is forever.
+  </p>
+  <label class="block mb-10">
+    <span class="muted fs-12">Reason</span><br>
+    <textarea id="supReason" rows="3" class="w-full" placeholder="Why is this acceptable?"></textarea>
+  </label>
+  <label class="block mb-16">
+    <span class="muted fs-12">Expires in (days)</span><br>
+    <input type="number" id="supDays" value="30" min="1" max="365">
+  </label>
+  <div class="row end">
+    <button class="ghost" id="supCancel">Cancel</button>
+    <button class="primary" id="supOk">Accept risk</button>
+  </div>
+</dialog>
+
+<script src="/app.js?v=__VERSION__"></script>
+</body>
+</html>
