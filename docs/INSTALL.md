@@ -304,6 +304,25 @@ scan.example.com {
 }
 ```
 
+**oauth2-proxy must be started with `--set-xauthrequest=true`.** Without it the
+`/oauth2/auth` response contains no `X-Auth-Request-*` headers at all, so
+`copy_headers` copies nothing and every request reaches secscan anonymous. The
+symptom is a clean sign-in followed by:
+
+```json
+{"error":{"code":"unauthorized","message":"authentication required"}}
+```
+
+which reads like a secscan bug and is actually a proxy that forwarded no
+identity. It fails closed, which is the right direction, but it is easy to
+misdiagnose.
+
+Also make sure the identity the proxy sends is the one in
+`SECSCAN_ADMIN_EMAILS`. oauth2-proxy with `--oidc-email-claim=preferred_username`
+sends the directory UPN (`you@corp.example`), not a personal address — a
+mismatch authenticates fine and then silently drops you to the lowest role,
+where the scan controls are simply absent.
+
 secscan still answers `401` to a request with no identity header even from a
 trusted peer, so the proxy failing open does not silently expose the dashboard.
 Confirm both halves after deploying:
