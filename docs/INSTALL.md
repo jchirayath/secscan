@@ -192,9 +192,132 @@ SECSCAN_TRUSTED_PROXIES=10.0.0.0/8
 start without it. Trusting identity headers from any peer is an authentication
 bypass, not a configuration preference.
 
+#### The proxy must strip the identity headers on the way in
+
+`SECSCAN_TRUSTED_PROXIES` checks **which peer** may assert an identity. It does
+not, and cannot, check **where the header value came from**. A forged header
+that arrives through a trusted proxy is still trusted — so if your proxy passes
+client headers through untouched, proxy mode is wide open:
+
+```
+curl -H 'X-MS-CLIENT-PRINCIPAL-NAME: admin@example.com' https://scan.example.com/
+```
+
+The proxy must therefore **delete these headers from the inbound request before
+it authenticates**, and set them only from the authentication response:
+
+```
+X-MS-CLIENT-PRINCIPAL-NAME
+X-MS-CLIENT-PRINCIPAL-ROLES
+X-MS-CLIENT-PRINCIPAL-ID
+X-MS-CLIENT-PRINCIPAL
+```
+
+Strip first, authenticate, then set. Any other order is a bypass. Verify it from
+outside with the `curl` above: a correct deployment still bounces you to the
+identity provider.
+
 ---
 
-## 7. Verify the install
+## 7. Deploying as a container behind an identity-aware proxy
+
+A worked example of the layout above: Caddy terminating TLS and running an
+Entra gate via oauth2-proxy, with secscan reachable only through it.
+
+**Dockerfile** — the binary is cross-compiled outside and copied in, so there is
+no toolchain in the runtime image:
+
+```dockerfile
+FROM alpine:3.20
+RUN apk add --no-cache openssh-client ca-certificates tzdata \
+ && adduser -D -u 1001 -h /home/secscan secscan
+COPY secscan /usr/local/bin/secscan
+USER secscan
+WORKDIR /home/secscan
+EXPOSE 8788
+ENTRYPOINT ["/usr/local/bin/secscan"]
+CMD ["serve"]
+```
+
+`openssh-client` is required, not incidental: secscan shells out to the system
+`ssh` rather than vendoring a crypto stack, so without it every remote scan
+fails at the first target.
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' \
+  -o secscan ./cmd/secscan
+```
+
+**Compose service** — note there are no published ports. The dashboard is an
+inventory of an estate's weaknesses; it should never listen anywhere the
+internet can reach it directly.
+
+```yaml
+  secscan:
+    build: ./secscan
+    restart: unless-stopped
+    environment:
+      SECSCAN_AUTH_MODE: proxy
+      SECSCAN_TRUSTED_PROXIES: "172.18.0.0/16"   # the compose bridge only
+      SECSCAN_BIND: "0.0.0.0:8788"
+      SECSCAN_BASE_URL: "https://scan.example.com"
+      SECSCAN_ADMIN_EMAILS: "you@example.com"
+    volumes:
+      - ./secscan/state:/home/secscan/.secscan    # JSON doc + JSONL history
+      - ./secscan/ssh:/home/secscan/.ssh:ro       # its own scanning keypair
+    expose:
+      - "8788"
+    security_opt: [ no-new-privileges:true ]
+    cap_drop: [ ALL ]
+```
+
+Generate the service's keypair **on the server**, rather than copying in a key
+you already use from a workstation: two callers with two credentials means
+either can be revoked without disturbing the other.
+
+**Caddy site block** — strip, authenticate, rename, forward:
+
+```caddyfile
+scan.example.com {
+	# 1. distrust anything the client claims about its identity
+	request_header -X-MS-CLIENT-PRINCIPAL-NAME
+	request_header -X-MS-CLIENT-PRINCIPAL-ROLES
+	request_header -X-MS-CLIENT-PRINCIPAL-ID
+	request_header -X-MS-CLIENT-PRINCIPAL
+
+	# 2. authenticate, and set the identity from the AUTH RESPONSE.
+	#    copy_headers renames oauth2-proxy's header to the one secscan reads.
+	forward_auth oauth2-proxy:4180 {
+		uri /oauth2/auth
+		copy_headers X-Auth-Request-Email>X-MS-CLIENT-PRINCIPAL-NAME
+		@unauth status 401
+		handle_response @unauth {
+			redir * https://scan.example.com/oauth2/start?rd={scheme}%3A%2F%2F{host}{uri}
+		}
+	}
+
+	# 3. scans of remote hosts take minutes; the default read timeout would
+	#    cut one off mid-flight and surface it as a proxy error.
+	reverse_proxy secscan:8788 {
+		transport http { read_timeout 600s  write_timeout 600s }
+	}
+}
+```
+
+secscan still answers `401` to a request with no identity header even from a
+trusted peer, so the proxy failing open does not silently expose the dashboard.
+Confirm both halves after deploying:
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' https://scan.example.com/          # 302 → IdP
+curl -o /dev/null -w '%{http_code}\n' \
+     -H 'X-MS-CLIENT-PRINCIPAL-NAME: admin@example.com' \
+     https://scan.example.com/                                           # 302, not 200
+```
+
+---
+
+## 8. Verify the install
 
 ```bash
 go test ./...      # unit tests and golden fixtures
