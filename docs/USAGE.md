@@ -29,6 +29,17 @@ secscan targets
 secscan targets rm web01
 ```
 
+`add` is an **upsert**: re-running it with an existing name replaces that target
+in place and prints `updated target` rather than `added target`. That is how you
+edit a target — there is no `targets edit`. Flags come from the new invocation,
+so repeat any you still want:
+
+```bash
+secscan targets add web01 scan@10.0.0.9 -key ~/.ssh/id_ed25519 -sudo -critical
+```
+
+`rm` removes **every** entry with the given name.
+
 | Flag | Effect |
 |---|---|
 | `-key FILE` | SSH private key for this target |
