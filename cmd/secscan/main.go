@@ -370,12 +370,44 @@ func cmdTargets(st *store.Store, args []string) int {
 				t.Host = hostSpec
 			}
 		}
-		ts := append(st.Targets(), t)
-		if err := st.SetTargets(ts); err != nil {
+		// Upsert, never blind-append. A plain append meant re-running `add`
+		// with a corrected address left BOTH entries in place, and since
+		// targets are matched by name, `scan <name>` then silently picked
+		// whichever came first — so a target could appear fixed while every
+		// scan still ran against the old address. Replacing in place also
+		// makes `add` the natural way to edit a target, which is what
+		// operators reach for; there is no `targets edit`.
+		//
+		// The name is replaced at its existing position rather than appended,
+		// so `targets` output does not reshuffle when a target is edited. Any
+		// further entries sharing the name are dropped, which repairs state
+		// files that already accumulated duplicates under the old behaviour.
+		ts := st.Targets()
+		out := make([]exec.Target, 0, len(ts)+1)
+		replaced := false
+		for _, ex := range ts {
+			if ex.Name != t.Name {
+				out = append(out, ex)
+				continue
+			}
+			if !replaced {
+				out = append(out, t) // keep position
+				replaced = true
+			}
+			// duplicates beyond the first are discarded
+		}
+		if !replaced {
+			out = append(out, t)
+		}
+		if err := st.SetTargets(out); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Printf("added target %s\n", t.Name)
+		if replaced {
+			fmt.Printf("updated target %s\n", t.Name)
+		} else {
+			fmt.Printf("added target %s\n", t.Name)
+		}
 		return 0
 
 	case "rm":
