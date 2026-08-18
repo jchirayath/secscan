@@ -74,7 +74,11 @@ func New(cfg *config.Config) (Authenticator, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &proxyAuth{trusted: nets}, nil
+		return &proxyAuth{
+			trusted:        nets,
+			adminEmails:    cfg.AdminEmails,
+			allowedDomains: cfg.AllowedDomains,
+		}, nil
 
 	case "entra":
 		return newEntraAuth(cfg)
@@ -94,7 +98,19 @@ func (localAuth) Authenticate(_ *http.Request) (Principal, error) {
 
 // ------------------------------------------------------------------ proxy
 
-type proxyAuth struct{ trusted []*net.IPNet }
+type proxyAuth struct {
+	trusted []*net.IPNet
+
+	// Same two settings entra mode honours. Proxy mode originally read the
+	// role ONLY from X-MS-CLIENT-PRINCIPAL-ROLES, which meant
+	// SECSCAN_ADMIN_EMAILS and SECSCAN_ALLOWED_DOMAINS were silently dead
+	// config behind a reverse proxy: identity-aware proxies that forward an
+	// email but no roles (oauth2-proxy, most nginx auth_request setups) left
+	// every user — including the configured admin — stuck on viewer, with the
+	// controls simply absent and nothing explaining why.
+	adminEmails    []string
+	allowedDomains []string
+}
 
 func (proxyAuth) Mode() string            { return "proxy" }
 func (proxyAuth) Routes(_ *http.ServeMux) {}
@@ -123,7 +139,22 @@ func (p *proxyAuth) Authenticate(r *http.Request) (Principal, error) {
 	if email == "" {
 		return Principal{}, fmt.Errorf("no identity header from proxy")
 	}
+	// The proxy vouches for WHO the caller is; it does not decide whether that
+	// identity may use this instance. A proxy shared across several apps will
+	// happily authenticate someone outside the intended tenant, so the domain
+	// allow-list is enforced here as well as in entra mode.
+	if !domainAllowed(email, p.allowedDomains) {
+		slog.Warn("authenticated identity outside the allowed domains — rejected",
+			slog.String("email", email))
+		return Principal{}, fmt.Errorf("domain not permitted for %s", email)
+	}
+
 	role := rbac.FromClaims(splitList(r.Header.Get("X-MS-CLIENT-PRINCIPAL-ROLES")))
+	for _, a := range p.adminEmails {
+		if strings.EqualFold(a, email) {
+			role = rbac.RoleAdmin
+		}
+	}
 	return Principal{Email: email, Name: email, Role: role}, nil
 }
 
@@ -332,7 +363,15 @@ func (e *entraAuth) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *entraAuth) domainAllowed(email string) bool {
-	if len(e.cfg.AllowedDomains) == 0 {
+	return domainAllowed(email, e.cfg.AllowedDomains)
+}
+
+// domainAllowed is shared by entra and proxy mode so the two cannot drift.
+// An empty list means "no restriction" — the same meaning the config docs give
+// it — but an address with no domain at all is never allowed, since it cannot
+// be checked against anything.
+func domainAllowed(email string, allowed []string) bool {
+	if len(allowed) == 0 {
 		return true
 	}
 	at := strings.LastIndex(email, "@")
@@ -340,7 +379,7 @@ func (e *entraAuth) domainAllowed(email string) bool {
 		return false
 	}
 	dom := strings.ToLower(email[at+1:])
-	for _, d := range e.cfg.AllowedDomains {
+	for _, d := range allowed {
 		if strings.EqualFold(d, dom) {
 			return true
 		}

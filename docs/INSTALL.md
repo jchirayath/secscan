@@ -188,6 +188,12 @@ SECSCAN_AUTH_MODE=proxy
 SECSCAN_TRUSTED_PROXIES=10.0.0.0/8
 ```
 
+Proxy mode honours `SECSCAN_ADMIN_EMAILS` and `SECSCAN_ALLOWED_DOMAINS` exactly
+as entra mode does: the proxy says *who* the caller is, and secscan decides what
+that identity may do. Set both — most identity-aware proxies forward an email
+and no roles at all, and without an admin list every user, including you, lands
+on `viewer`.
+
 `SECSCAN_TRUSTED_PROXIES` is **required** in proxy mode and secscan refuses to
 start without it. Trusting identity headers from any peer is an authentication
 bypass, not a configuration preference.
