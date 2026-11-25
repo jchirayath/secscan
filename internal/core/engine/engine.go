@@ -465,9 +465,52 @@ type osvReport struct {
 	} `json:"results"`
 }
 
+// osvRoot is where osv-scanner looks for lockfiles.
+const osvRoot = "/opt"
+
+// osvListRoots sorts osvRoot's entries into readable (R) and unreadable (U)
+// by the scan account. POSIX sh only: BusyBox find has no -readable.
+const osvListRoots = `for d in ` + osvRoot + `/* ` + osvRoot + `/.[!.]*; do ` +
+	`[ -e "$d" ] || continue; ` +
+	`if [ -d "$d" ] && ! { [ -r "$d" ] && [ -x "$d" ]; }; then echo "U $d"; else echo "R $d"; fi; done`
+
 func (o OSVScanner) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
+	fs, _, err := o.RunPartial(ctx, r, a)
+	return fs, err
+}
+
+// RunPartial scans the entries of /opt the scan account can read and reports
+// the others as not covered, so findings under them are neither re-raised nor
+// closed. Engines deliberately run without sudo (exec.needsPrivilege), and
+// osv-scanner 2.7 aborts the whole scan, exit 127 with no report, on the
+// first directory it cannot open: on betty, root-only /opt/containerd. Before
+// adapters failed closed, that abort read as a clean scan.
+func (o OSVScanner) RunPartial(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, []string, error) {
+	ls := r.Run(ctx, "sh", "-c", osvListRoots)
+	if ls.Err != nil {
+		return nil, nil, ls.Err
+	}
+	var roots, skipped []string
+	for _, line := range strings.Split(ls.Stdout, "\n") {
+		kind, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		switch {
+		case !ok:
+		case kind == "R":
+			roots = append(roots, path)
+		case kind == "U":
+			skipped = append(skipped, path+"/") // trailing slash: a directory prefix in store.Coverage
+		}
+	}
+	if len(roots) == 0 {
+		return nil, skipped, nil // nothing readable under /opt: an honest zero
+	}
+	fs, err := o.scan(ctx, r, a, roots)
+	return fs, skipped, err
+}
+
+func (o OSVScanner) scan(ctx context.Context, r exec.Runner, a *finding.Asset, roots []string) ([]finding.Finding, error) {
 	now := clock.Now()
-	res := r.Run(ctx, "osv-scanner", "scan", "--format", "json", "--recursive", "/opt")
+	res := r.Run(ctx, append([]string{"osv-scanner", "scan", "--format", "json", "--recursive"}, roots...)...)
 	if res.Err != nil {
 		return nil, res.Err
 	}

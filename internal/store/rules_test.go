@@ -152,3 +152,26 @@ func TestGlob(t *testing.T) {
 		}
 	}
 }
+
+// TestCoverageDirectoryPrefix: an engine that could not read a directory
+// reports it with a trailing slash, and nothing beneath it counts as covered.
+// Entries without the slash (image names) still match exactly.
+func TestCoverageDirectoryPrefix(t *testing.T) {
+	c := Coverage{"osv-scanner": {"/opt/containerd/"}, "trivy-image": {"redis:7"}}
+	cases := []struct {
+		engine, loc string
+		want        bool
+	}{
+		{"osv-scanner", "/opt/containerd/x/package-lock.json", false},
+		{"osv-scanner", "/opt/az/lib/requirements.txt", true},
+		{"osv-scanner", "/opt/containerd-other/go.sum", true},
+		{"trivy-image", "redis:7", false},
+		{"trivy-image", "redis:7-alpine", true},
+		{"nuclei", "anything", false},
+	}
+	for _, tc := range cases {
+		if got := c.covers(tc.engine, tc.loc); got != tc.want {
+			t.Errorf("covers(%s, %s) = %v, want %v", tc.engine, tc.loc, got, tc.want)
+		}
+	}
+}

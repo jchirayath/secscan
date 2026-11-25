@@ -239,7 +239,9 @@ func (c Coverage) covers(engine, location string) bool {
 		return false
 	}
 	for _, l := range skipped {
-		if l == location {
+		// An entry ending in "/" is a directory the engine could not read:
+		// nothing beneath it was looked at.
+		if l == location || (strings.HasSuffix(l, "/") && strings.HasPrefix(location, l)) {
 			return false
 		}
 	}

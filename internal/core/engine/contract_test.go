@@ -166,8 +166,10 @@ func TestContractOSVScanner(t *testing.T) {
   }
 }`)
 	r := contractRunner("", func(argv []string) []string {
-		if len(argv) > 0 && argv[0] == "osv-scanner" {
-			return replaceArg(argv, "/opt", root)
+		// The adapter first lists /opt with a shell loop, then scans the
+		// readable entries; point both at the fixture.
+		if len(argv) == 3 && argv[0] == "sh" {
+			return []string{"sh", "-c", strings.ReplaceAll(argv[2], osvRoot, root)}
 		}
 		return argv
 	})
