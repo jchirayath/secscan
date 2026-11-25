@@ -80,11 +80,20 @@ EOF`},
 // Release-tarball installs, pinned to a version rather than "latest" so an
 // install is reproducible and a compromised release channel cannot silently
 // change what lands on the host.
+//
+// The `renovate:` markers let the update bot propose bumps as pull requests,
+// and ci/engines.sh reads these same constants so CI's engine contract tests
+// run the exact version a bump would ship. Keep each marker directly above its
+// constant (the bot's match is line-anchored).
 const (
+	// renovate: datasource=github-releases depName=gitleaks/gitleaks
 	gitleaksVersion = "8.21.2"
-	osvVersion      = "1.9.1"
-	nucleiVersion   = "3.11.1"
-	testsslVersion  = "3.2.4"
+	// renovate: datasource=github-releases depName=google/osv-scanner
+	osvVersion = "1.9.1"
+	// renovate: datasource=github-releases depName=projectdiscovery/nuclei
+	nucleiVersion = "3.11.1"
+	// renovate: datasource=github-tags depName=testssl/testssl.sh
+	testsslVersion = "3.2.4"
 
 	gitleaksInstall = `set -e
 arch=$(uname -m); case "$arch" in x86_64) a=x64;; aarch64|arm64) a=arm64;; *) echo "unsupported arch $arch"; exit 1;; esac

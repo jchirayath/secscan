@@ -1,0 +1,132 @@
+// Renovate: keeps every version secscan depends on current, as pull requests
+// gated by .github/workflows/ci.yml (vet, tests, binary smoke test, guards, and
+// the engine contract tests at the version being proposed).
+//
+// What it watches (secscan has no Go module dependencies by design — ci/guards.sh
+// fails a `require` block — so "dependencies" means these):
+//   - the Go toolchain: the `go` line in go.mod (CI installs from it)
+//   - GitHub Actions: SHA-pinned, digest and version comment kept in step
+//   - the engines secscan installs on targets: the `renovate:`-marked constants
+//     in internal/core/engine/install.go (gitleaks, osv-scanner, nuclei, testssl.sh)
+//   - CI tools: trivy (ci/engines.sh), gitleaks and zizmor (ci.yml)
+//
+// Policy, from the engineering standard (SUP-1, SEC-15, CLEAN-10):
+//   - a 7-day release-age cooldown on everything, so a hijacked release is
+//     usually caught upstream before it reaches a PR here; vulnerability fixes
+//     are exempt (osvVulnerabilityAlerts below), so security deadlines can be met
+//   - weekly, grouped, one concern per PR
+//   - automerge only where the gate is a sufficient reviewer (see packageRules)
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":dependencyDashboard",
+  ],
+  timezone: "UTC",
+  schedule: ["before 6am on monday"],
+  minimumReleaseAge: "7 days",
+  internalChecksFilter: "strict", // no PR until the cooldown has passed
+  prConcurrentLimit: 6,
+  labels: ["dependencies"],
+  // Release notes are fetched into every PR body; the weekly upstream-watch
+  // issue adds the secscan-specific reading (flags, output shape, new rules).
+  fetchChangeLogs: "pr",
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: { labels: ["security"], minimumReleaseAge: null, schedule: ["at any time"] },
+
+  customManagers: [
+    {
+      // `// renovate: datasource=… depName=…` on the line above a Go constant.
+      customType: "regex",
+      managerFilePatterns: ["/\\.go$/"],
+      matchStrings: [
+        "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\"",
+      ],
+      extractVersionTemplate: "^v?(?<version>.+)$",
+    },
+    {
+      // `# renovate: datasource=… depName=…` above `NAME=1.2.3` (shell) or
+      // `NAME: 1.2.3` (workflow env).
+      customType: "regex",
+      managerFilePatterns: ["/^ci\\/.+\\.sh$/", "/^\\.github\\/workflows\\/.+\\.ya?ml$/"],
+      matchStrings: [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*[A-Z_]+\\s*[:=]\\s*\"?(?<currentValue>[^\"\\s]+)\"?",
+      ],
+      extractVersionTemplate: "^v?(?<version>.+)$",
+    },
+  ],
+
+  packageRules: [
+    {
+      // The go directive: track the newest stable minor, not just patches —
+      // an EOL toolchain stops getting stdlib security fixes, and secscan is
+      // stdlib-only, so the toolchain IS its dependency tree.
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang"],
+      rangeStrategy: "bump",
+    },
+    {
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang"],
+      groupName: "Go toolchain",
+      // Patch releases are stdlib security/bug fixes; the gate is a sufficient
+      // reviewer. A new minor changes language and stdlib behaviour: review.
+      matchUpdateTypes: ["patch"],
+      automerge: true,
+    },
+    {
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang"],
+      matchUpdateTypes: ["minor", "major"],
+      groupName: "Go toolchain",
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      // Actions: pinned digests and minor/patch bumps of first-party actions.
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+      matchUpdateTypes: ["digest", "pinDigest", "patch", "minor"],
+      automerge: true,
+    },
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["major"],
+      automerge: false,
+      addLabels: ["needs-review"],
+    },
+    {
+      // Engines secscan installs ON TARGETS. These run with root on hosts the
+      // operator owns, and their output feeds every finding, so even a patch
+      // gets a human look — the contract tests prove the adapter still parses,
+      // not that the release is trustworthy. One PR per engine, never grouped:
+      // a breaking engine must not hold back the others.
+      matchFileNames: ["internal/core/engine/install.go"],
+      addLabels: ["engine", "needs-review"],
+      automerge: false,
+      commitMessageTopic: "engine {{depName}}",
+      prBodyNotes: [
+        "**Engine bump.** Before merging: CI `engines` job green (contract tests ran this exact version); release notes read for CLI-flag, JSON-output and default-rule changes; check the weekly *upstream-watch* issue for anything flagged against this engine. If it adds a capability secscan should use, open a follow-up issue — do not widen this PR.",
+      ],
+    },
+    {
+      // Major engine versions (osv-scanner 1 → 2 is pending at time of writing)
+      // usually change CLI or output: separate PR, extra label.
+      matchFileNames: ["internal/core/engine/install.go"],
+      matchUpdateTypes: ["major"],
+      addLabels: ["breaking"],
+    },
+    {
+      // CI-only tools: they never ship, and the gate exercises them directly.
+      matchFileNames: ["ci/engines.sh", ".github/workflows/**"],
+      matchDatasources: ["github-releases", "pypi"],
+      matchUpdateTypes: ["patch", "minor"],
+      groupName: "CI tools",
+      automerge: true,
+    },
+  ],
+  // Automerge only ever happens through branch protection: Renovate waits for
+  // the required checks (gate, engines, workflows) and merges nothing red.
+  platformAutomerge: true,
+}
