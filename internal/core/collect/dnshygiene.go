@@ -49,6 +49,12 @@ func (d DNSHygiene) Check(ctx context.Context, host string, a *finding.Asset) ([
 	if host == "" || host == "localhost" {
 		return nil, Skip(d.ID(), "no public host name for this target — DNS hygiene needs a resolvable name")
 	}
+	// A target addressed by IP has no name to check. Before this guard the
+	// "parent domain" of 10.30.0.4 came out as "0.4", and the scan reported
+	// missing SPF and DMARC records for a domain that cannot exist.
+	if net.ParseIP(strings.Trim(host, "[]")) != nil {
+		return nil, Skip(d.ID(), "target is addressed by IP ("+host+") — DNS hygiene needs a host name; set the target's address to its FQDN to enable it")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 

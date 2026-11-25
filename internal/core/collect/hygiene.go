@@ -718,7 +718,18 @@ func (h Hygiene) userCrontabs(ctx context.Context, r exec.Runner, a *finding.Ass
 			return nil
 		}
 	}
-	users := lines(res.Stdout)
+	// /var/spool/cron holds user files directly on RHEL, but on Debian it holds
+	// the crontabs/ directory (plus at's spool dirs). When the scan account
+	// cannot read crontabs/ itself, the fallback listing used to report the
+	// directory as a user named "crontabs".
+	var users []string
+	for _, u := range lines(res.Stdout) {
+		switch u {
+		case "crontabs", "atjobs", "atspool", "lastrun":
+			continue
+		}
+		users = append(users, u)
+	}
 	if len(users) == 0 {
 		return nil
 	}
