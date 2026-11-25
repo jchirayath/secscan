@@ -13,7 +13,7 @@ type gitleaksRunner struct{ res exec.Result }
 func (c gitleaksRunner) Run(context.Context, ...string) exec.Result      { return c.res }
 func (c gitleaksRunner) Has(context.Context, string) bool                { return true }
 func (c gitleaksRunner) ReadFile(context.Context, string) (string, bool) { return "", false }
-func (c gitleaksRunner) Target() exec.Target                             { return exec.Target{Name: "t"} }
+func (c gitleaksRunner) Target() exec.Target                             { return exec.Target{Name: "t", Host: "host.example.net"} }
 
 // TestGitleaksFailsClosed: a gitleaks run that wrote no report must be an
 // error, not a clean scan. Before this, exit 1 with empty stdout (how gitleaks
@@ -42,5 +42,37 @@ func TestGitleaksFailsClosed(t *testing.T) {
 		if len(fs) != c.wantFound {
 			t.Errorf("%s: %d findings, want %d", c.name, len(fs), c.wantFound)
 		}
+	}
+}
+
+// TestOSVScannerFailsClosed: exit 128 with no output means "no package
+// sources", an honest zero; any other empty run is a failure.
+func TestOSVScannerFailsClosed(t *testing.T) {
+	cases := []struct {
+		name    string
+		res     exec.Result
+		wantErr bool
+	}{
+		{"clean scan", exec.Result{Stdout: `{"results":[]}`}, false},
+		{"nothing to scan (128)", exec.Result{ExitCode: 128}, false},
+		{"bad path (127), no report", exec.Result{ExitCode: 127, Stderr: "stat /opt: no such file"}, true},
+		{"exit 0 but no report", exec.Result{}, true},
+	}
+	for _, c := range cases {
+		_, err := OSVScanner{}.Run(context.Background(), gitleaksRunner{c.res}, asset())
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// TestNucleiFailsClosed: no output on exit 0 is "nothing matched"; no output
+// on a non-zero exit is a failed run.
+func TestNucleiFailsClosed(t *testing.T) {
+	if _, err := (Nuclei{}).Run(context.Background(), gitleaksRunner{exec.Result{}}, asset()); err != nil {
+		t.Errorf("exit 0, no output: err = %v, want a clean result", err)
+	}
+	if _, err := (Nuclei{}).Run(context.Background(), gitleaksRunner{exec.Result{ExitCode: 1, Stderr: "FTL templates not found"}}, asset()); err == nil {
+		t.Error("exit 1, no output: no error, so a failed run would close open findings")
 	}
 }

@@ -399,7 +399,11 @@ func (n Nuclei) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]fin
 	body := strings.TrimSpace(res.Stdout)
 	if body == "" {
 		// nuclei exits 0 with no output when nothing matched, which is the
-		// common and good case.
+		// common and good case. Empty output with a non-zero exit is a failed
+		// run, and reading it as clean would let coverage close open findings.
+		if res.ExitCode != 0 {
+			return nil, fmt.Errorf("nuclei produced no output (exit %d): %s", res.ExitCode, firstLine(res.Stderr))
+		}
 		return nil, nil
 	}
 

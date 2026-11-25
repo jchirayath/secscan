@@ -473,7 +473,14 @@ func (o OSVScanner) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 	}
 	body := strings.TrimSpace(res.Stdout)
 	if body == "" {
-		return nil, nil
+		// Fail closed, as gitleaks does. osv-scanner exits 128 with no output
+		// when there is nothing to scan ("no package sources found"), which is
+		// an honest zero. Any other empty run (127 for a bad path, a crash) is
+		// a failure, and must not let coverage close open findings.
+		if res.ExitCode == 128 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("osv-scanner wrote no report (exit %d): %s", res.ExitCode, firstLine(res.Stderr))
 	}
 	var rep osvReport
 	if err := json.Unmarshal([]byte(body), &rep); err != nil {
