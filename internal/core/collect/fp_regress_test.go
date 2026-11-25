@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -107,5 +108,42 @@ func TestSSHDUsesEffectiveConfig(t *testing.T) {
 	}
 	if !found {
 		t.Error("effective X11Forwarding yes not reported")
+	}
+}
+
+// TestHeadersOnCrossHostRedirect: two Entra-gated sites on one host answer an
+// anonymous GET with a 302 to the Entra sign-in. The fetcher rightly stops
+// there, but every document header was then judged on the redirect, so both
+// were reported as having no CSP — although one is secscan itself, which sends a strict one to every
+// signed-in user. Headers that only govern a rendered page are skipped on a
+// 3xx; the ones that matter on any response are still checked.
+func TestHeadersOnCrossHostRedirect(t *testing.T) {
+	rules := func(resp *SiteResponse) map[string]bool {
+		got := map[string]bool{}
+		for _, f := range (WebHeaders{}).checkHeaders(&finding.Asset{ID: "a"}, site{Name: "gated.example", Port: 443}, resp) {
+			got[f.RuleID] = true
+		}
+		return got
+	}
+	hdr := http.Header{"Server": {"Caddy 2.11"}, "Location": {"https://login.example/authorize"}}
+
+	redirect := rules(&SiteResponse{URL: "https://gated.example/", Status: 302, Header: hdr,
+		StoppedAt: "redirects to login.example, which was not followed"})
+	for _, r := range []string{"web.csp-missing", "web.modern-isolation-headers", "web.framing-unrestricted", "web.nosniff-missing"} {
+		if redirect[r] {
+			t.Errorf("302: reported %s, which only applies to a rendered page", r)
+		}
+	}
+	for _, r := range []string{"web.hsts-missing", "web.version-disclosure"} {
+		if !redirect[r] {
+			t.Errorf("302: did not report %s, which applies to any response", r)
+		}
+	}
+
+	page := rules(&SiteResponse{URL: "https://gated.example/", Status: 200, Header: hdr})
+	for _, r := range []string{"web.csp-missing", "web.framing-unrestricted", "web.hsts-missing", "web.version-disclosure"} {
+		if !page[r] {
+			t.Errorf("200: did not report %s — the redirect guard must not hide real pages", r)
+		}
 	}
 }

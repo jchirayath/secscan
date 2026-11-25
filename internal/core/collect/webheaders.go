@@ -311,6 +311,16 @@ func (w WebHeaders) checkHeaders(a *finding.Asset, s site, resp *SiteResponse) [
 		}
 	}
 
+	// A redirect that was not followed (to another host, usually a sign-in
+	// gate) is not a page. CSP, framing, MIME sniffing and the isolation headers
+	// govern how a browser treats a document, and a 3xx is never rendered, so
+	// judging them on the redirect reported a missing CSP on every Entra-gated
+	// site whose application sends a strict one to signed-in users. HSTS (above),
+	// version disclosure and cookies still apply to any response, so those stay.
+	if resp.Status >= 300 && resp.Status <= 399 {
+		return append(out, versionDisclosure(a, s, ev, loc, resp)...)
+	}
+
 	// --- CSP -------------------------------------------------------------
 	if csp == "" {
 		sev := finding.SevMedium
@@ -412,7 +422,17 @@ func (w WebHeaders) checkHeaders(a *finding.Asset, s site, resp *SiteResponse) [
 			ev, "headers").WithLocation(loc+"#frame-ancestors", finding.Component{}))
 	}
 
-	// --- version disclosure ----------------------------------------------
+	return append(out, versionDisclosure(a, s, ev, loc, resp)...)
+}
+
+// checkCookies inspects Set-Cookie attributes.
+//
+// Cookie VALUES are never recorded. A Set-Cookie on the root of a live site is
+// very often a session identifier, and a scanner that writes one into a report
+// has turned its own output into the credential store it is warning about.
+// versionDisclosure reports a Server or X-Powered-By header that names a version.
+func versionDisclosure(a *finding.Asset, s site, ev []finding.Evidence, loc string, resp *SiteResponse) []finding.Finding {
+	var out []finding.Finding
 	var disclosing []string
 	for _, h := range []string{"Server", "X-Powered-By"} {
 		v := strings.TrimSpace(resp.Header.Get(h))
@@ -438,11 +458,6 @@ func (w WebHeaders) checkHeaders(a *finding.Asset, s site, resp *SiteResponse) [
 	return out
 }
 
-// checkCookies inspects Set-Cookie attributes.
-//
-// Cookie VALUES are never recorded. A Set-Cookie on the root of a live site is
-// very often a session identifier, and a scanner that writes one into a report
-// has turned its own output into the credential store it is warning about.
 func (w WebHeaders) checkCookies(a *finding.Asset, s site, resp *SiteResponse) []finding.Finding {
 	var out []finding.Finding
 	for _, c := range resp.Cookies {
