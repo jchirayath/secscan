@@ -393,13 +393,26 @@ func (g Gitleaks) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]f
 	if res.Err != nil {
 		return nil, res.Err
 	}
+	// Fail closed. A run counts as a scan only if gitleaks wrote a JSON report
+	// (a clean scan writes "[]"). exec does not treat a non-zero exit as an
+	// error, and gitleaks exits 1 with EMPTY stdout when it fails (bad path,
+	// unreadable config, crash). Reading that as "no leaks" made the engine
+	// report Ran, and coverage then closed every open secret finding. Exit 1
+	// is also how gitleaks reports leaks found, so a non-zero exit is accepted
+	// only together with a non-empty report.
 	body := strings.TrimSpace(res.Stdout)
-	if body == "" || body == "[]" {
-		return nil, nil
+	fail := func(why string) error {
+		return fmt.Errorf("gitleaks %s (exit %d): %s", why, res.ExitCode, firstLine(res.Stderr))
+	}
+	if body == "" {
+		return nil, fail("wrote no report")
 	}
 	var hits []gitleaksFinding
 	if err := json.Unmarshal([]byte(body), &hits); err != nil {
 		return nil, fmt.Errorf("parse gitleaks json: %w", err)
+	}
+	if res.ExitCode != 0 && len(hits) == 0 {
+		return nil, fail("failed")
 	}
 
 	var out []finding.Finding
