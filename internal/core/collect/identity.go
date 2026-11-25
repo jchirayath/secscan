@@ -248,7 +248,7 @@ func (s SSHD) Collect(ctx context.Context, r exec.Runner, a *finding.Asset) ([]f
 
 	// Judge the EFFECTIVE configuration when sshd will tell us. `sshd -T`
 	// resolves Include, applies first-value-wins, and fills compiled-in
-	// defaults. Merging files by hand got all three wrong at once on betty
+	// defaults. Merging files by hand got all three wrong at once on a production host
 	// (2026-11-25): a drop-in setting X11Forwarding no — which sshd honours,
 	// because drop-ins are read at the Include line near the TOP and the first
 	// value wins — was either unreadable to the scan account or lost to the

@@ -301,7 +301,7 @@ type staleKernel struct {
 // finding instead of one per CVE per package.
 //
 // Trivy rates every CVE in every package of the old kernel as if it were live:
-// on betty, after a routine kernel upgrade, that was 787 CVEs × 7 packages =
+// on a production host, after a routine kernel upgrade, that was 787 CVEs × 7 packages =
 // 5,509 HIGH findings, 82% of everything open, for code that was not executing.
 // A container-scale problem gets a container-scale fix elsewhere in this
 // package; this is the host equivalent.

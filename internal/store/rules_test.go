@@ -26,7 +26,7 @@ func open(t *testing.T) *Store {
 var asset = finding.Asset{ID: "a"}
 
 // Engine findings must close when the engine ran and no longer reports them —
-// the bug that left 837 findings for long-gone images open on betty.
+// the bug that left 837 findings for long-gone images open on a production host.
 func TestMergeClosesEngineFindings(t *testing.T) {
 	s := open(t)
 	s.Merge(asset, []finding.Finding{

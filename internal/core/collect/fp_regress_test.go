@@ -10,14 +10,14 @@ import (
 	"github.com/jchirayath/secscan/internal/core/finding"
 )
 
-// Both of these were false positives on betty (2026-11-25); each test pins the
+// Both of these were false positives on a production host (2026-11-25); each test pins the
 // fix so the scanner cannot quietly go back to being confidently wrong.
 
 // TestDNSHygieneSkipsIPTargets: a target addressed by IP has no domain. The
-// old code took the "parent domain" of 10.30.0.4 to be "0.4" and reported
+// old code took the "parent domain" of 10.0.0.4 to be "0.4" and reported
 // missing SPF and DMARC for it.
 func TestDNSHygieneSkipsIPTargets(t *testing.T) {
-	for _, host := range []string{"10.30.0.4", "2001:db8::1", "[2001:db8::1]"} {
+	for _, host := range []string{"10.0.0.4", "2001:db8::1", "[2001:db8::1]"} {
 		fs, note := DNSHygiene{}.Check(context.Background(), host, &finding.Asset{ID: "a"})
 		if len(fs) != 0 {
 			t.Errorf("%s: %d findings, want none — an IP has no SPF/DMARC to check", host, len(fs))
@@ -81,7 +81,7 @@ func (f fileRunner) ReadFile(_ context.Context, p string) (string, bool) {
 }
 func (fileRunner) Target() exec.Target { return exec.Target{Name: "t"} }
 
-// TestSSHDUsesEffectiveConfig: on betty a drop-in set X11Forwarding no, which
+// TestSSHDUsesEffectiveConfig: on a production host a drop-in set X11Forwarding no, which
 // sshd honours, but the collector kept reporting the stock "yes" from the main
 // file. When sshd -T is available its answer is the truth.
 func TestSSHDUsesEffectiveConfig(t *testing.T) {

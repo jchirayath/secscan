@@ -56,7 +56,7 @@ func TestStaleKernelCollapses(t *testing.T) {
 		"linux-tools-common":               {"CVE-5"}, // no ABI in the name
 		"openssl":                          {"CVE-6"},
 	})
-	a := &finding.Asset{ID: "betty", Kernel: "7.0.0-1020-azure"}
+	a := &finding.Asset{ID: "host-a", Kernel: "7.0.0-1020-azure"}
 	fs, err := Trivy{}.Run(context.Background(), cannedRunner{out}, a)
 	if err != nil {
 		t.Fatal(err)

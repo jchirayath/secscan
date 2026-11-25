@@ -459,12 +459,12 @@ func PlanScript(actions []Action, assetName string) string {
 // Both the CLI and the server merge through this, so they close findings by
 // the same rule. Engines were missing from the earlier version of this
 // (collectors only), which meant no Trivy or Gitleaks finding could ever be
-// marked fixed — on betty, 837 findings for images and packages long gone.
+// marked fixed — on a production host, 837 findings for images and packages long gone.
 func CoverageOf(res Result) store.Coverage {
 	cov := store.Coverage{}
 	for _, c := range res.Collectors {
 		// A not-applicable collector covers its ground as surely as one that
-		// ran: on betty, a PTR finding raised against 10.30.0.4 before DNS
+		// ran: on a production host, a PTR finding raised against 10.0.0.4 before DNS
 		// hygiene learned to skip IP targets stayed open with nothing able to
 		// close it.
 		if c.Ran || c.NotApplicable {
