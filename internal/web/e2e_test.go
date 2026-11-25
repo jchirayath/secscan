@@ -465,10 +465,10 @@ func TestE2E_FullJourney(t *testing.T) {
 // TestE2E_RoleBoundaries drives the API as each role against the live server.
 func TestE2E_RoleBoundaries(t *testing.T) {
 	cases := []struct {
-		role                       string
-		findings, evidence, audit  int
-		suppress, scan, features   int
-		install                    int
+		role                      string
+		findings, evidence, audit int
+		suppress, scan, features  int
+		install                   int
 	}{
 		{"viewer", 200, 403, 403, 403, 403, 403, 403},
 		{"auditor", 200, 200, 200, 403, 403, 403, 403},

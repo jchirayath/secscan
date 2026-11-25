@@ -17,8 +17,8 @@ type fakeAuth struct {
 }
 
 func (f fakeAuth) Authenticate(*http.Request) (auth.Principal, error) { return f.p, f.err }
-func (fakeAuth) Mode() string                                        { return "test" }
-func (fakeAuth) Routes(*http.ServeMux)                               {}
+func (fakeAuth) Mode() string                                         { return "test" }
+func (fakeAuth) Routes(*http.ServeMux)                                {}
 
 func serverWith(t *testing.T, a auth.Authenticator) *Server {
 	t.Helper()

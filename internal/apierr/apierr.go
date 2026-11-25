@@ -13,20 +13,20 @@ type Code string
 
 const (
 	// Client faults.
-	BadRequest   Code = "bad_request"   // malformed input of any kind, incl. bad JSON
-	NotFound     Code = "not_found"     // the addressed thing does not exist
-	Conflict     Code = "conflict"      // state precondition failed
-	Unauthorized Code = "unauthorized"  // no valid identity
-	Forbidden    Code = "forbidden"     // valid identity, insufficient capability
-	RateLimited  Code = "rate_limited"  // too many requests
+	BadRequest   Code = "bad_request"  // malformed input of any kind, incl. bad JSON
+	NotFound     Code = "not_found"    // the addressed thing does not exist
+	Conflict     Code = "conflict"     // state precondition failed
+	Unauthorized Code = "unauthorized" // no valid identity
+	Forbidden    Code = "forbidden"    // valid identity, insufficient capability
+	RateLimited  Code = "rate_limited" // too many requests
 
 	// Server / dependency faults.
-	Internal        Code = "internal"         // unexpected; a bug
-	StoreFailed     Code = "store_failed"     // persistence rejected the write
-	Unavailable     Code = "unavailable"      // dependency down, retry may help
-	NotConfigured   Code = "not_configured"   // feature needs config that is absent
-	ScanFailed      Code = "scan_failed"      // a scan ran and errored
-	EngineMissing   Code = "engine_missing"   // an external tool is not installed
+	Internal      Code = "internal"       // unexpected; a bug
+	StoreFailed   Code = "store_failed"   // persistence rejected the write
+	Unavailable   Code = "unavailable"    // dependency down, retry may help
+	NotConfigured Code = "not_configured" // feature needs config that is absent
+	ScanFailed    Code = "scan_failed"    // a scan ran and errored
+	EngineMissing Code = "engine_missing" // an external tool is not installed
 )
 
 // All is the complete set, used by the guard test to prove no code is defined

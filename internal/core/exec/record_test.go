@@ -18,12 +18,12 @@ func TestRedactionTargetsContentNotMetadata(t *testing.T) {
 		"cat /etc/gshadow",
 	}
 	mustKeep := []string{
-		"stat -c %a %n /etc/shadow",       // the mode IS the finding
-		"stat -Lc %a %U %n /etc/gshadow",  //
-		"find /root /home -name .ssh",     // paths, not key material
-		"ls -1 /etc/sudoers.d",            //
+		"stat -c %a %n /etc/shadow",      // the mode IS the finding
+		"stat -Lc %a %U %n /etc/gshadow", //
+		"find /root /home -name .ssh",    // paths, not key material
+		"ls -1 /etc/sudoers.d",           //
 		"test -s /var/lib/logrotate/status",
-		"cat /etc/os-release",             // content, but not secret
+		"cat /etc/os-release", // content, but not secret
 		"apt-get -s upgrade",
 	}
 	for _, c := range mustRedact {

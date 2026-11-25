@@ -386,7 +386,10 @@ type gitleaksFinding struct {
 
 func (g Gitleaks) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
 	now := clock.Now()
-	res := r.Run(ctx, "gitleaks", "dir", "/opt", "--no-banner", "--report-format", "json", "--report-path", "/dev/stdout")
+	// "--report-path -" is gitleaks' documented stdout. "/dev/stdout" worked on
+	// Linux but gitleaks 8.30 on macOS refuses it as "not writable", writes
+	// nothing, and the empty body below then read as a clean scan.
+	res := r.Run(ctx, "gitleaks", "dir", "/opt", "--no-banner", "--report-format", "json", "--report-path", "-")
 	if res.Err != nil {
 		return nil, res.Err
 	}

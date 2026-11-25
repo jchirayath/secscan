@@ -29,13 +29,12 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fails=$((fails+1)); }
 step "go vet"
 if go vet ./...; then ok "vet"; else bad "vet"; fi
 
-# Formatting is reported but not yet blocking: four files on public-release
-# predate the check (internal/apierr, internal/core/exec/record_test.go and two
-# internal/web tests). Once they are gofmt'd, set GATE_GOFMT_STRICT=1 in CI.
+# Formatting blocks. The four files that predated the check were gofmt'd on
+# 2026-11-25; GATE_GOFMT_STRICT=0 downgrades it to a warning for a local run.
 step "gofmt"
 unformatted=$(gofmt -l cmd internal ci 2>/dev/null || true)
 if [ -z "$unformatted" ]; then ok "gofmt"
-elif [ "${GATE_GOFMT_STRICT:-0}" = 1 ]; then bad "gofmt — run gofmt -w:"; echo "$unformatted" | sed 's/^/      /'
+elif [ "${GATE_GOFMT_STRICT:-1}" = 1 ]; then bad "gofmt — run gofmt -w:"; echo "$unformatted" | sed 's/^/      /'
 else printf '  \033[33m~\033[0m gofmt — not yet blocking; unformatted:\n'; echo "$unformatted" | sed 's/^/      /'
 fi
 
