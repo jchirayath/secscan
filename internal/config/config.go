@@ -68,6 +68,7 @@ var registry = []Key{
 
 	{Name: "SECSCAN_HTTP_TIMEOUT", Kind: KindDuration, Default: "30s", Desc: "Outbound HTTP timeout"},
 	{Name: "SECSCAN_SCAN_TIMEOUT", Kind: KindDuration, Default: "5m", Desc: "Per-collector timeout"},
+	{Name: "SECSCAN_SCAN_INTERVAL", Kind: KindDuration, Default: "0", Desc: "serve: scan every target this often (e.g. 24h); 0 disables"},
 	{Name: "SECSCAN_SSH_TIMEOUT", Kind: KindDuration, Default: "20s", Desc: "SSH connect timeout"},
 	{Name: "SECSCAN_LOG_LEVEL", Kind: KindString, Default: "info", Desc: "debug | info | warn | error"},
 	{Name: "SECSCAN_SNAPSHOT_DIR", Kind: KindString, Default: "", Desc: "Where per-scan snapshots are written (default $SECSCAN_HOME/snapshots)"},
@@ -93,8 +94,10 @@ type Config struct {
 
 	HTTPTimeout time.Duration
 	ScanTimeout time.Duration
-	SSHTimeout  time.Duration
-	LogLevel    string
+	// ScanInterval > 0 makes `serve` scan every target on that cadence.
+	ScanInterval time.Duration
+	SSHTimeout   time.Duration
+	LogLevel     string
 
 	SnapshotDir  string
 	SnapshotKeep int
@@ -163,6 +166,11 @@ func Load() (*Config, error) {
 	c.TrustedProxies = list("SECSCAN_TRUSTED_PROXIES")
 	c.HTTPTimeout = dur("SECSCAN_HTTP_TIMEOUT")
 	c.ScanTimeout = dur("SECSCAN_SCAN_TIMEOUT")
+	c.ScanInterval = dur("SECSCAN_SCAN_INTERVAL")
+	if c.ScanInterval < 0 || (c.ScanInterval > 0 && c.ScanInterval < 10*time.Minute) {
+		// A full scan takes minutes; anything tighter is a load test, not a schedule.
+		errs = append(errs, "SECSCAN_SCAN_INTERVAL must be 0 (off) or at least 10m")
+	}
 	c.SSHTimeout = dur("SECSCAN_SSH_TIMEOUT")
 	c.LogLevel = get("SECSCAN_LOG_LEVEL")
 

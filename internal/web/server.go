@@ -52,6 +52,7 @@ type Server struct {
 	// scanning guards against concurrent runs of the same target, which would
 	// interleave writes to the same asset.
 	scanning map[string]bool
+	scanMu   sync.Mutex // guards scanning: the scheduler and HTTP scans race on it
 }
 
 // New builds the server.
@@ -531,44 +532,23 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apierr.NotFound, "no target named "+body.Target)
 		return
 	}
-	if s.scanning[chosen.Name] {
-		writeErr(w, apierr.Conflict, "a scan of "+chosen.Name+" is already running")
-		return
-	}
-
-	s.scanning[chosen.Name] = true
-	defer delete(s.scanning, chosen.Name)
-
 	s.audit.Write(audit.Entry{
 		Caller: p.Email, Role: string(p.Role), Action: "scan.run",
 		Target: chosen.Name, Result: "allowed", RemoteIP: peerIP(r),
 	})
 
-	res, err := scan.Run(r.Context(), *chosen, scan.Options{
-		Timeout:  s.cfg.ScanTimeout,
-		Features: s.store.Features(),
-	})
-	if err != nil {
+	res, sum, err := s.runScan(r.Context(), *chosen)
+	var se storeError
+	switch {
+	case errors.Is(err, errScanBusy):
+		writeErr(w, apierr.Conflict, "a scan of "+chosen.Name+" is already running")
+		return
+	case errors.As(err, &se):
+		writeErr(w, apierr.StoreFailed, se.Error())
+		return
+	case err != nil:
 		writeErr(w, apierr.ScanFailed, err.Error())
 		return
-	}
-	ran := map[string]bool{}
-	for _, c := range res.Collectors {
-		if c.Ran {
-			ran[c.ID] = true
-		}
-	}
-	newN, fixedN, err := s.store.Merge(res.Asset, res.Findings, ran)
-	if err != nil {
-		writeErr(w, apierr.StoreFailed, err.Error())
-		return
-	}
-	if err := s.store.SetTranscript(res.Asset.ID, res.Transcript); err != nil {
-		slog.Warn("transcript persist failed", slog.String("err", err.Error()))
-	}
-	sum := scan.Summarise(res, newN, fixedN)
-	if err := s.store.AppendHistory(sum); err != nil {
-		slog.Warn("history append failed", slog.String("err", err.Error()))
 	}
 	writeData(w, map[string]any{
 		"summary":    sum,
@@ -670,6 +650,7 @@ func (s *Server) ListenAndServe(ctx context.Context) int {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
+	go s.scheduler(ctx)
 
 	slog.Info("secscan listening",
 		slog.String("addr", s.cfg.Bind),

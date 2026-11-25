@@ -128,6 +128,13 @@ handful of privileged reads (`/etc/shadow`, `sshd_config`, `ss -tulpnH`,
 Full instructions, including the sudoers grant, optional engines and Entra ID
 setup: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
+**Scheduled scans.** Set `SECSCAN_SCAN_INTERVAL=24h` and `secscan serve` scans
+every target on that cadence (first pass two minutes after start), recording
+each run in the audit log as `scheduler`. Schedule it this way, not with cron
+calling `secscan scan`: the server keeps state in memory, so a separate scan
+process writes results the dashboard does not show until a restart, and the
+dashboard's next save can overwrite them.
+
 ## Architecture
 
 Zero external Go dependencies, enforced by CI. Everything is stdlib: HTTP, TLS,
