@@ -55,3 +55,57 @@ func TestUserCrontabsIgnoresSpoolDirs(t *testing.T) {
 		t.Errorf("RHEL-style user file not counted: %+v", fs)
 	}
 }
+
+// fileRunner serves commands (keyed by the full command line) and files.
+type fileRunner struct {
+	cmds  map[string]string
+	files map[string]string
+}
+
+func (f fileRunner) Run(_ context.Context, argv ...string) exec.Result {
+	c := strings.Join(argv, " ")
+	out, ok := f.cmds[c]
+	if !ok {
+		return exec.Result{Command: c, ExitCode: 1}
+	}
+	return exec.Result{Command: c, Stdout: out}
+}
+func (fileRunner) Has(context.Context, string) bool { return true }
+func (f fileRunner) ReadFile(_ context.Context, p string) (string, bool) {
+	s, ok := f.files[p]
+	return s, ok
+}
+func (fileRunner) Target() exec.Target { return exec.Target{Name: "t"} }
+
+// TestSSHDUsesEffectiveConfig: on betty a drop-in set X11Forwarding no, which
+// sshd honours, but the collector kept reporting the stock "yes" from the main
+// file. When sshd -T is available its answer is the truth.
+func TestSSHDUsesEffectiveConfig(t *testing.T) {
+	main := "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\nX11Forwarding yes\n"
+	r := fileRunner{
+		cmds:  map[string]string{"sshd -T": "x11forwarding no\npasswordauthentication no\npermitrootlogin without-password\n"},
+		files: map[string]string{"/etc/ssh/sshd_config": main},
+	}
+	fs, _ := SSHD{}.Collect(context.Background(), r, &finding.Asset{ID: "a"})
+	for _, f := range fs {
+		if f.RuleID == "identity.ssh-x11-forwarding" {
+			t.Fatalf("X11 reported from the file although sshd -T says no: %s", f.Evidence[0].Output)
+		}
+	}
+
+	// And the effective "yes" is still reported, with sshd -T as the source.
+	r.cmds["sshd -T"] = "x11forwarding yes\npasswordauthentication no\n"
+	fs, _ = SSHD{}.Collect(context.Background(), r, &finding.Asset{ID: "a"})
+	found := false
+	for _, f := range fs {
+		if f.RuleID == "identity.ssh-x11-forwarding" {
+			found = true
+			if !strings.Contains(f.Evidence[0].Path+f.Evidence[0].Output, "sshd -T") {
+				t.Errorf("evidence does not name sshd -T as its source: %+v", f.Evidence[0])
+			}
+		}
+	}
+	if !found {
+		t.Error("effective X11Forwarding yes not reported")
+	}
+}

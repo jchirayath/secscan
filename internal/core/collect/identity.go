@@ -246,21 +246,38 @@ func (s SSHD) Collect(ctx context.Context, r exec.Runner, a *finding.Asset) ([]f
 		return nil, Skip(s.ID(), "/etc/ssh/sshd_config not present — no SSH daemon on this host")
 	}
 
-	// Modern distros split config across sshd_config.d/*.conf, and those
-	// override the main file. Reading only the main file is how scanners
-	// produce confident, wrong answers about Ubuntu 22.04+.
-	merged := cfg
-	if res := r.Run(ctx, "ls", "/etc/ssh/sshd_config.d"); res.OK() {
-		for _, name := range lines(res.Stdout) {
-			if !strings.HasSuffix(name, ".conf") {
-				continue
-			}
-			if inc, ok := r.ReadFile(ctx, "/etc/ssh/sshd_config.d/"+name); ok {
-				merged += "\n# --- /etc/ssh/sshd_config.d/" + name + "\n" + inc
+	// Judge the EFFECTIVE configuration when sshd will tell us. `sshd -T`
+	// resolves Include, applies first-value-wins, and fills compiled-in
+	// defaults. Merging files by hand got all three wrong at once on betty
+	// (2026-11-25): a drop-in setting X11Forwarding no — which sshd honours,
+	// because drop-ins are read at the Include line near the TOP and the first
+	// value wins — was either unreadable to the scan account or lost to the
+	// stock "X11Forwarding yes" later in the main file, and the finding stayed
+	// open after the fix.
+	kv, source := map[string]string(nil), "sshd -T (effective configuration)"
+	if eff := r.Run(ctx, "sshd", "-T"); eff.OK() {
+		kv = kvFile(eff.Stdout, " ")
+	} else if eff := r.Run(ctx, "/usr/sbin/sshd", "-T"); eff.OK() {
+		kv = kvFile(eff.Stdout, " ")
+	}
+	if len(kv) == 0 {
+		// Fallback: merge the files ourselves. Drop-ins are appended after
+		// the main file and kvFile lets the later value win, which matches
+		// sshd only when no drop-in conflicts with a later main-file line.
+		source = "/etc/ssh/sshd_config + sshd_config.d (sshd -T unavailable; approximate)"
+		merged := cfg
+		if res := r.Run(ctx, "ls", "/etc/ssh/sshd_config.d"); res.OK() {
+			for _, name := range lines(res.Stdout) {
+				if !strings.HasSuffix(name, ".conf") {
+					continue
+				}
+				if inc, ok := r.ReadFile(ctx, "/etc/ssh/sshd_config.d/"+name); ok {
+					merged += "\n# --- /etc/ssh/sshd_config.d/" + name + "\n" + inc
+				}
 			}
 		}
+		kv = kvFile(merged, " ")
 	}
-	kv := kvFile(merged, " ")
 
 	var out []finding.Finding
 	for _, rule := range sshdRules {
@@ -279,7 +296,7 @@ func (s SSHD) Collect(ctx context.Context, r exec.Runner, a *finding.Asset) ([]f
 		if !present {
 			src = "not set — this is the compiled-in default"
 		}
-		f.Evidence = evFile("/etc/ssh/sshd_config", fmt.Sprintf("%s %s   (%s)", rule.key, val, src))
+		f.Evidence = evFile(source, fmt.Sprintf("%s %s   (%s)", rule.key, val, src))
 		f.Remediation = finding.Remediation{Op: "change_config", Summary: rule.remedy}
 		out = append(out, f.WithLocation("sshd_config:"+rule.key, finding.Component{}))
 	}
