@@ -1,21 +1,82 @@
+# The gate every change passes — including the update PRs Renovate opens.
+# Branch protection should require `gate` and `engines` (docs/AUTOMATION.md), so
+# an automated bump that breaks a scan cannot merge, by hand or by automerge.
+#
+# Conventions from the engineering standard (SEC-17): actions pinned to a commit
+# SHA with the version in a comment (Renovate keeps both current), least-privilege
+# permissions, no persisted credentials, downloaded tools checksum-verified.
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main, public-release]
+  pull_request:
+  workflow_dispatch:
+permissions: { contents: read }
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  build:
+  gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-      - run: go vet ./...
-      - run: go test ./...
-      # GitHub's own secret scanning needs Advanced Security on a private repo,
-      # so the equivalent runs here instead — including over history, which a
-      # working-tree scan would miss.
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      # The toolchain comes from go.mod, so a Renovate bump of the `go` line is
+      # tested on the version it asks for — no second place to forget.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5   # v7.1.0
+        with: { go-version-file: go.mod, cache: false }
+      # Verified against the release's own checksum list rather than a hash
+      # pasted here, so a Renovate bump of the version line stays one line.
+      - name: No secrets anywhere in history (gitleaks, pinned + checksum-verified)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./ci/guards.sh
-      - run: go build -o secscan ./cmd/secscan
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$f" "$base/$f"
+          curl -fsSL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " $f\$" | sha256sum -c -
+          mv "$f" gl.tgz
+          tar -xzf gl.tgz gitleaks && sudo install -m 0755 gitleaks /usr/local/bin/gitleaks && rm -f gl.tgz gitleaks
+          gitleaks git . --no-banner --redact
+      - name: Gate — vet, tests (incl. binary smoke test), guards, build
+        run: ci/gate.sh
+
+  # The engines secscan shells out to, at the exact versions install.go pins,
+  # run against planted fixtures. This is what catches an engine bump that
+  # changes an output shape or a flag — the failure unit tests cannot see.
+  engines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: gate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5   # v7.1.0
+        with: { go-version-file: go.mod, cache: false }
+      - name: testssl.sh prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bsdextrautils dnsutils
+      - name: Install the pinned engines
+        run: |
+          ci/engines.sh install "$RUNNER_TEMP/engines"
+          echo "$RUNNER_TEMP/engines/bin" >> "$GITHUB_PATH"
+      # No cache for trivy's vulnerability DB on purpose: a cache written by one
+      # PR run and read by another is a poisoning path (zizmor cache-poisoning),
+      # and the fresh download costs ~20s.
+      - name: Engine contract tests
+        env: { SECSCAN_ENGINE_CONTRACT: "1" }
+        run: go test -count=1 -run Contract -v ./internal/core/engine/
+
+  # Workflows are code that runs with repository tokens; lint them (SEC-17).
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - name: zizmor
+        env:
+          # renovate: datasource=pypi depName=zizmor
+          ZIZMOR_VERSION: 1.32.0
+        run: pipx run "zizmor==${ZIZMOR_VERSION}" --offline .github/workflows
