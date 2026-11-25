@@ -472,7 +472,7 @@ const osvRoot = "/opt"
 // by the scan account. POSIX sh only: BusyBox find has no -readable.
 const osvListRoots = `for d in ` + osvRoot + `/* ` + osvRoot + `/.[!.]*; do ` +
 	`[ -e "$d" ] || continue; ` +
-	`if [ -d "$d" ] && ! { [ -r "$d" ] && [ -x "$d" ]; }; then echo "U $d"; else echo "R $d"; fi; done`
+	`if [ -d "$d" ] && ! { [ -r "$d" ] && [ -x "$d" ]; }; then echo "U $d"; else echo "R $d"; fi; done; echo END`
 
 func (o OSVScanner) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
 	fs, _, err := o.RunPartial(ctx, r, a)
@@ -489,6 +489,13 @@ func (o OSVScanner) RunPartial(ctx context.Context, r exec.Runner, a *finding.As
 	ls := r.Run(ctx, "sh", "-c", osvListRoots)
 	if ls.Err != nil {
 		return nil, nil, ls.Err
+	}
+	// Fail closed here too: a listing that failed or was cut short must not
+	// read as "nothing under /opt", or coverage would close every finding.
+	// The script ends with END, so an empty /opt is told apart from a failure.
+	out := strings.TrimSpace(ls.Stdout)
+	if ls.ExitCode != 0 || !(out == "END" || strings.HasSuffix(out, "\nEND")) {
+		return nil, nil, fmt.Errorf("listing %s failed (exit %d): %s", osvRoot, ls.ExitCode, firstLine(ls.Stderr))
 	}
 	var roots, skipped []string
 	for _, line := range strings.Split(ls.Stdout, "\n") {

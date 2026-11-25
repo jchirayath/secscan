@@ -81,9 +81,23 @@ func TestOSVScannerFailsClosed(t *testing.T) {
 		{"exit 0 but no report", exec.Result{}, true},
 	}
 	for _, c := range cases {
-		_, err := OSVScanner{}.Run(context.Background(), osvRunner{listing: "R /opt/az\n", scan: c.res}, asset())
+		_, err := OSVScanner{}.Run(context.Background(), osvRunner{listing: "R /opt/az\nEND\n", scan: c.res}, asset())
 		if (err != nil) != c.wantErr {
 			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// TestOSVScannerListingFailsClosed: if the /opt listing fails or is cut
+// short, the run is an error, never an empty-but-clean scan.
+func TestOSVScannerListingFailsClosed(t *testing.T) {
+	for name, listing := range map[string]string{
+		"no output":       "",
+		"truncated":       "R /opt/az\n",
+		"marker mid-path": "R /opt/END\n",
+	} {
+		if _, _, err := (OSVScanner{}).RunPartial(context.Background(), osvRunner{listing: listing, scan: exec.Result{Stdout: `{"results":[]}`}}, asset()); err == nil {
+			t.Errorf("%s: no error, so a failed listing would read as an empty /opt", name)
 		}
 	}
 }
@@ -95,7 +109,7 @@ func TestOSVScannerFailsClosed(t *testing.T) {
 func TestOSVScannerSkipsUnreadable(t *testing.T) {
 	var argv []string
 	r := osvRunner{
-		listing: "R /opt/az\nU /opt/containerd\nR /opt/testssl.sh\n",
+		listing: "R /opt/az\nU /opt/containerd\nR /opt/testssl.sh\nEND\n",
 		scan:    exec.Result{Stdout: `{"results":[]}`},
 		argv:    &argv,
 	}
@@ -110,7 +124,7 @@ func TestOSVScannerSkipsUnreadable(t *testing.T) {
 	if len(skipped) != 1 || skipped[0] != "/opt/containerd/" {
 		t.Errorf("skipped = %q, want [/opt/containerd/]", skipped)
 	}
-	if _, skipped, err := (OSVScanner{}).RunPartial(context.Background(), osvRunner{listing: "U /opt/containerd\n"}, asset()); err != nil || len(skipped) != 1 {
+	if _, skipped, err := (OSVScanner{}).RunPartial(context.Background(), osvRunner{listing: "U /opt/containerd\nEND\n"}, asset()); err != nil || len(skipped) != 1 {
 		t.Errorf("nothing readable: err=%v skipped=%q, want an honest zero with the skip recorded", err, skipped)
 	}
 }
