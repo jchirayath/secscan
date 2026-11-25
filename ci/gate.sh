@@ -39,7 +39,9 @@ else printf '  \033[33m~\033[0m gofmt — not yet blocking; unformatted:\n'; ech
 fi
 
 step "go test -race ./..."
-if go test -race -count=1 ./...; then ok "tests (incl. binary smoke test)"; else bad "tests"; fi
+# -timeout 20m: the web e2e suite runs ~4 min under -race on a laptop and came
+# within reach of go test's 10-minute default on a shared CI runner.
+if go test -race -count=1 -timeout 20m ./...; then ok "tests (incl. binary smoke test)"; else bad "tests"; fi
 
 step "ci/guards.sh"
 if bash ci/guards.sh; then ok "guards"; else bad "guards"; fi

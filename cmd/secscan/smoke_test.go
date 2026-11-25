@@ -61,7 +61,11 @@ func secscanEnv(home string, extra ...string) []string {
 
 func run(t *testing.T, bin, home string, args ...string) (stdout, stderr string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Five minutes, not two: a real scan of the machine running the test walks
+	// the whole root filesystem twice (setuid files, unowned files). That takes
+	// seconds on a server and over two minutes on a GitHub runner carrying tens
+	// of GB of toolchains, where the old limit killed a scan that was working.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := osexec.CommandContext(ctx, bin, args...)
 	cmd.Env = secscanEnv(home)
