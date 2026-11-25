@@ -1,0 +1,90 @@
+name: upstream-weekly
+# Weekly look at what changed upstream that secscan should know about — the
+# engineering standard's sources-weekly pattern applied to a product:
+#
+#   canary   installs the LATEST release of every engine (not the pins) and runs
+#            the engine contract tests. A failure here is an early warning: the
+#            adapter needs work before the Renovate bump PR can go green.
+#   report   ci/upstream.sh — pins vs latest, release-note lines that touch flags
+#            or output, new gitleaks rules, new nuclei CVE templates, Go toolchain
+#            support + govulncheck, and the candidate engines from
+#            docs/TOOL-LANDSCAPE.md. Filed as ONE rolling issue labelled
+#            upstream-watch: opened when something needs a human, updated while
+#            it does, closed when it no longer does.
+#
+# It opens no pull requests and changes no code. Version bumps are Renovate's
+# job (.github/renovate.json5); adopting a new engine capability is a design
+# decision, so it becomes an issue a human turns into a PR.
+on:
+  schedule: [{ cron: "0 13 * * 1" }]   # Mondays 13:00 UTC, after Renovate's Monday run
+  workflow_dispatch:
+permissions: {}
+concurrency: { group: upstream-weekly, cancel-in-progress: false }
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5   # v7.1.0
+        with: { go-version-file: go.mod, cache: false }
+      - name: testssl.sh prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bsdextrautils dnsutils
+      - name: Install the latest upstream engines
+        env: { GITHUB_TOKEN: "${{ github.token }}" }
+        run: |
+          ci/engines.sh install "$RUNNER_TEMP/engines" --latest
+          echo "$RUNNER_TEMP/engines/bin" >> "$GITHUB_PATH"
+      - name: Engine contract tests against latest
+        env: { SECSCAN_ENGINE_CONTRACT: "1" }
+        run: go test -count=1 -run Contract -v ./internal/core/engine/
+
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: canary
+    if: ${{ always() }}
+    permissions: { contents: read, issues: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5   # v7.1.0
+        with: { go-version-file: go.mod, cache: false }
+      # Run on the toolchain go.mod selects, so it reports the stdlib
+      # vulnerabilities the shipped binary actually carries.
+      - name: govulncheck
+        env:
+          # renovate: datasource=go depName=golang.org/x/vuln
+          GOVULNCHECK_VERSION: 1.10.0
+        run: go run "golang.org/x/vuln/cmd/govulncheck@v${GOVULNCHECK_VERSION}" ./... > govuln.txt 2>&1 || true
+      - name: Build the report
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+        run: |
+          set +e
+          case "$CANARY_RESULT" in success) c=pass;; failure) c=fail;; *) c=skip;; esac
+          CANARY=$c GOVULN_FILE=govuln.txt ci/upstream.sh > report.md
+          echo "attention=$?" >> "$GITHUB_OUTPUT"
+          # GitHub caps an issue body at 65,536 characters.
+          head -c 60000 report.md > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Open, update or close the upstream-watch issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTENTION: ${{ steps.report.outputs.attention }}
+        run: |
+          gh label create upstream-watch --color 1D76DB --description "Weekly upstream check for secscan's engines and toolchain" 2>/dev/null || true
+          n=$(gh issue list --label upstream-watch --state open --json number --jq '.[0].number')
+          today=$(date -u +%F)
+          if [ "$ATTENTION" = "1" ]; then
+            if [ -n "$n" ]; then gh issue edit "$n" --body-file body.md && gh issue comment "$n" --body "Re-checked $today — still needs attention; body updated."
+            else gh issue create --title "Upstream watch — $today" --label upstream-watch --body-file body.md; fi
+          elif [ "$ATTENTION" = "0" ]; then
+            if [ -n "$n" ]; then gh issue close "$n" --comment "Nothing needs a human as of $today. Closing."; fi
+          else
+            echo "::error::ci/upstream.sh failed (exit $ATTENTION) — see the step summary"; exit 1
+          fi
