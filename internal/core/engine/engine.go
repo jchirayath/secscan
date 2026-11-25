@@ -483,7 +483,7 @@ func (o OSVScanner) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 // the others as not covered, so findings under them are neither re-raised nor
 // closed. Engines deliberately run without sudo (exec.needsPrivilege), and
 // osv-scanner 2.7 aborts the whole scan, exit 127 with no report, on the
-// first directory it cannot open: on betty, root-only /opt/containerd. Before
+// first directory it cannot open, such as a root-only /opt/containerd. Before
 // adapters failed closed, that abort read as a clean scan.
 func (o OSVScanner) RunPartial(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, []string, error) {
 	ls := r.Run(ctx, "sh", "-c", osvListRoots)
