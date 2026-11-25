@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jchirayath/secscan/internal/core/finding"
+	"github.com/jchirayath/secscan/internal/store"
 )
 
 func mkFinding(sev finding.Severity, remedy string, i int) finding.Finding {
@@ -55,5 +56,26 @@ func TestScoreStillDiscriminates(t *testing.T) {
 	}
 	if Score(big) <= 0 {
 		t.Error("score reached zero and stopped conveying anything")
+	}
+}
+
+// TestCoverageCountsNotApplicable: a collector that established its checks do
+// not apply (DNS hygiene on an IP-addressed target) must count as coverage, or
+// a finding it raised before it knew better can never be closed. A plain skip
+// (could not run) must not count.
+func TestCoverageCountsNotApplicable(t *testing.T) {
+	cov := CoverageOf(Result{Collectors: []store.CollectorRun{
+		{ID: "dns-hygiene", Skipped: "target is addressed by IP", NotApplicable: true},
+		{ID: "listeners", Skipped: "ssh unreachable"},
+		{ID: "accounts", Ran: true},
+	}})
+	if _, ok := cov["dns-hygiene"]; !ok {
+		t.Error("not-applicable collector missing from coverage: its stale findings would stay open")
+	}
+	if _, ok := cov["listeners"]; ok {
+		t.Error("a collector that could not run was counted as coverage: its findings would be wrongly closed")
+	}
+	if _, ok := cov["accounts"]; !ok {
+		t.Error("a collector that ran is missing from coverage")
 	}
 }

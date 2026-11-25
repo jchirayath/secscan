@@ -53,8 +53,11 @@ type CollectorRun struct {
 	ID      string `json:"id"`
 	Ran     bool   `json:"ran"`
 	Skipped string `json:"skipped,omitempty"`
-	Checks  int    `json:"checks"`
-	Found   int    `json:"found"`
+	// NotApplicable: the collector established its checks cannot apply to this
+	// target, which counts as coverage (see collect.NotApplicable).
+	NotApplicable bool `json:"not_applicable,omitempty"`
+	Checks        int  `json:"checks"`
+	Found         int  `json:"found"`
 }
 
 // state is the on-disk document.

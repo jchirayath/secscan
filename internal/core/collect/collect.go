@@ -17,16 +17,27 @@ import (
 
 // Note records what a collector did, including why it produced nothing.
 type Note struct {
-	Collector  string             `json:"collector"`
-	Ran        bool               `json:"ran"`
-	Skipped    string             `json:"skipped,omitempty"` // reason, when !Ran
-	Checks     int                `json:"checks"`
-	Provenance finding.Provenance `json:"provenance"`
+	Collector string `json:"collector"`
+	Ran       bool   `json:"ran"`
+	Skipped   string `json:"skipped,omitempty"` // reason, when !Ran
+	// NotApplicable marks a skip that is a definite answer, not a gap: the
+	// collector established that its checks do not apply to this target (DNS
+	// hygiene on a target addressed by IP). Coverage counts it, so findings it
+	// raised before it knew better are closed instead of staying open forever.
+	NotApplicable bool               `json:"not_applicable,omitempty"`
+	Checks        int                `json:"checks"`
+	Provenance    finding.Provenance `json:"provenance"`
 }
 
 // Skip builds a Note for a collector that could not run.
 func Skip(id, reason string) Note {
 	return Note{Collector: id, Ran: false, Skipped: reason, Provenance: finding.ProvUnavailable}
+}
+
+// NotApplicable builds a Note for a collector whose checks do not apply to
+// this target. Unlike Skip, it is evidence: nothing it looks for can exist here.
+func NotApplicable(id, reason string) Note {
+	return Note{Collector: id, Ran: false, Skipped: reason, NotApplicable: true, Provenance: finding.ProvLive}
 }
 
 // Ran builds a Note for a collector that completed.

@@ -110,7 +110,7 @@ func Run(ctx context.Context, t exec.Target, opts Options) (Result, error) {
 		fs, note := c.Collect(ctx, rec, &res.Asset)
 		all = append(all, fs...)
 		res.Collectors = append(res.Collectors, store.CollectorRun{
-			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped,
+			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped, NotApplicable: note.NotApplicable,
 			Checks: note.Checks, Found: len(fs),
 		})
 		res.Transcript[c.ID()] = rec.Steps()
@@ -162,7 +162,7 @@ func Run(ctx context.Context, t exec.Target, opts Options) (Result, error) {
 		all = append(all, fs...)
 		res.Transcript["web-headers"] = wrec.Steps()
 		res.Collectors = append(res.Collectors, store.CollectorRun{
-			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped,
+			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped, NotApplicable: note.NotApplicable,
 			Checks: note.Checks, Found: len(fs),
 		})
 	}
@@ -173,7 +173,7 @@ func Run(ctx context.Context, t exec.Target, opts Options) (Result, error) {
 		fs, note := collect.DNSHygiene{}.Check(ctx, t.Host, &res.Asset)
 		all = append(all, fs...)
 		res.Collectors = append(res.Collectors, store.CollectorRun{
-			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped,
+			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped, NotApplicable: note.NotApplicable,
 			Checks: note.Checks, Found: len(fs),
 		})
 	}
@@ -202,7 +202,7 @@ func Run(ctx context.Context, t exec.Target, opts Options) (Result, error) {
 		res.Transcript["controls"] = crec.Steps()
 		res.Controls = ctrls
 		res.Collectors = append(res.Collectors, store.CollectorRun{
-			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped,
+			ID: note.Collector, Ran: note.Ran, Skipped: note.Skipped, NotApplicable: note.NotApplicable,
 			Checks: note.Checks, Found: len(ctrls),
 		})
 		res.Mitigated = collect.ApplyControls(all, ctrls)
@@ -463,7 +463,11 @@ func PlanScript(actions []Action, assetName string) string {
 func CoverageOf(res Result) store.Coverage {
 	cov := store.Coverage{}
 	for _, c := range res.Collectors {
-		if c.Ran {
+		// A not-applicable collector covers its ground as surely as one that
+		// ran: on betty, a PTR finding raised against 10.30.0.4 before DNS
+		// hygiene learned to skip IP targets stayed open with nothing able to
+		// close it.
+		if c.Ran || c.NotApplicable {
 			cov[c.ID] = nil
 		}
 	}

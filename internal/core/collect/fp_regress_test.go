@@ -25,6 +25,9 @@ func TestDNSHygieneSkipsIPTargets(t *testing.T) {
 		if !strings.Contains(note.Skipped, "addressed by IP") {
 			t.Errorf("%s: skip note %q does not say why", host, note.Skipped)
 		}
+		if !note.NotApplicable {
+			t.Errorf("%s: skip is not marked not-applicable, so its stale findings would never close", host)
+		}
 	}
 }
 
