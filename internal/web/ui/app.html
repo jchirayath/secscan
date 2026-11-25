@@ -22,22 +22,33 @@
 </main>
 
 <dialog id="suppressDlg">
-  <h3 class="mt-0">Accept this risk</h3>
-  <p class="muted dlg-help">
-    Both fields are required. An accepted risk with no reason is
-    indistinguishable from an ignored one, and one with no expiry is forever.
+  <h3 class="mt-0" id="supTitle">Suppress this finding</h3>
+  <p class="muted dlg-help" id="supHelp">
+    A reason and an expiry are both required. A suppression with no reason is
+    indistinguishable from an ignored finding, and one with no expiry is forever.
   </p>
   <label class="block mb-10">
+    <span class="muted fs-12">Kind</span><br>
+    <select id="supKind">
+      <option value="false_positive">False positive — the scanner is wrong about this</option>
+      <option value="accepted_risk">Accepted risk — real, and we choose to live with it</option>
+    </select>
+  </label>
+  <label class="block mb-10">
+    <span class="muted fs-12">Applies to</span><br>
+    <select id="supScope"></select>
+  </label>
+  <label class="block mb-10">
     <span class="muted fs-12">Reason</span><br>
-    <textarea id="supReason" rows="3" class="w-full" placeholder="Why is this acceptable?"></textarea>
+    <textarea id="supReason" rows="3" class="w-full" placeholder="Why? Someone will read this later."></textarea>
   </label>
   <label class="block mb-16">
     <span class="muted fs-12">Expires in (days)</span><br>
-    <input type="number" id="supDays" value="30" min="1" max="365">
+    <input type="number" id="supDays" value="90" min="1" max="365">
   </label>
   <div class="row end">
     <button class="ghost" id="supCancel">Cancel</button>
-    <button class="primary" id="supOk">Accept risk</button>
+    <button class="primary" id="supOk">Suppress</button>
   </div>
 </dialog>
 

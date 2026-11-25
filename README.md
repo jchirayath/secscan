@@ -135,6 +135,18 @@ calling `secscan scan`: the server keeps state in memory, so a separate scan
 process writes results the dashboard does not show until a restart, and the
 dashboard's next save can overwrite them.
 
+**False positives and accepted risks.** On a finding, *Mark false positive…*
+or *Accept this risk…* — a reason and an expiry (1–365 days) are mandatory
+either way, and the two kinds stay distinct in the report: one says the scanner
+was wrong, the other that a real problem is tolerated. *Applies to* can widen a
+decision from the one finding to a **rule** (same rule ID, same component, same
+location, or everything under a folder), which also covers future scans — the
+only way a false positive survives the next package version bump. Rules are
+listed, counted and revoked under *Suppressions*; revoking reopens what they
+hid. Rules naming only an engine or a bare `*` are refused. From the command
+line, with `serve` stopped: `secscan rules add -kind false_positive -reason
+"testssl sample keys" -days 365 -engine gitleaks -location '/opt/testssl.sh/*'`.
+
 ## Architecture
 
 Zero external Go dependencies, enforced by CI. Everything is stdlib: HTTP, TLS,

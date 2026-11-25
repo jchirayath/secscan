@@ -75,6 +75,8 @@ func main() {
 		os.Exit(cmdServe(ctx, cfg, st, args))
 	case "targets":
 		os.Exit(cmdTargets(st, args))
+	case "rules":
+		os.Exit(cmdRules(st, args))
 	case "plan":
 		os.Exit(cmdPlan(st, args))
 	case "trend":
@@ -108,6 +110,9 @@ func usage() {
   secscan plan [name]       remediation plan;  -script to emit a shell script
   secscan trend [name]      posture over time from snapshots;  -diff to compare the last two
   secscan fix [target]      classify fixes by change-risk;  -apply runs the green ones
+  secscan rules             suppression rules;  rules add -kind false_positive|accepted_risk
+                            -reason TEXT -days N [-rule ID] [-component GLOB] [-location GLOB]
+                            [-engine E] [-asset A];  rules rm <id>   (stop serve first)
   secscan config            print resolved configuration;  -example emits a .env template
   secscan version
 
@@ -160,13 +165,7 @@ func cmdScan(ctx context.Context, cfg *config.Config, st *store.Store, args []st
 			continue
 		}
 
-		ran := map[string]bool{}
-		for _, c := range res.Collectors {
-			if c.Ran {
-				ran[c.ID] = true
-			}
-		}
-		newN, fixedN, err := st.Merge(res.Asset, res.Findings, ran)
+		newN, fixedN, err := st.Merge(res.Asset, res.Findings, scan.CoverageOf(res))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "persist %s: %v\n", t.Name, err)
 			exitCode = 1
@@ -884,3 +883,75 @@ func resolveTargets(st *store.Store, names []string) []exec.Target {
 }
 
 var _ = time.Now
+
+// ------------------------------------------------------------------ rules
+
+// cmdRules manages suppression rules from the command line.
+//
+// It writes state.json directly. A running `secscan serve` holds state in
+// memory and will overwrite this file on its next save, so stop the server
+// first (or use the dashboard / POST /api/rules, which go through the running
+// store). Rules made here are recorded as by "cli:<user>" so the audit trail
+// does not pretend a dashboard user made them.
+func cmdRules(st *store.Store, args []string) int {
+	if len(args) == 0 || args[0] == "list" {
+		rules := st.Rules()
+		if len(rules) == 0 {
+			fmt.Println("no suppression rules")
+			return 0
+		}
+		now := clock.Now()
+		for _, r := range rules {
+			state := "until " + r.Until.Format(time.DateOnly)
+			if !now.Before(r.Until) {
+				state = "EXPIRED"
+			}
+			fmt.Printf("%s  %-14s %-16s %+v\n    %s (by %s)\n", r.ID, r.Kind, state, r.Match, r.Reason, r.By)
+		}
+		return 0
+	}
+	switch args[0] {
+	case "add":
+		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
+		kind := fs.String("kind", "", "false_positive | accepted_risk")
+		reason := fs.String("reason", "", "why (required)")
+		days := fs.Int("days", 0, "expiry in days, 1-365 (required)")
+		var m store.RuleMatch
+		fs.StringVar(&m.RuleID, "rule", "", "exact rule id, e.g. vuln.cve-2026-12345")
+		fs.StringVar(&m.Component, "component", "", "component name glob ('*' spans '/')")
+		fs.StringVar(&m.Location, "location", "", "location glob ('*' spans '/')")
+		fs.StringVar(&m.Engine, "engine", "", "only findings from this engine/collector")
+		fs.StringVar(&m.AssetID, "asset", "", "only findings on this asset")
+		_ = fs.Parse(args[1:])
+		if *days < 1 || *days > 365 {
+			fmt.Fprintln(os.Stderr, "-days must be between 1 and 365 — suppressions expire by design")
+			return 2
+		}
+		by := "cli"
+		if u := os.Getenv("USER"); u != "" { //secscan:allow-getenv attribution only, not configuration
+			by += ":" + u
+		}
+		r, n, err := st.AddRule(store.Rule{Kind: finding.SuppressKind(*kind), Reason: strings.TrimSpace(*reason),
+			Match: m, Until: clock.Now().AddDate(0, 0, *days), By: by, Role: "cli"})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		fmt.Printf("rule %s added; suppressed %d open finding(s) now, and future scans will match it\n", r.ID, n)
+		return 0
+	case "rm":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: secscan rules rm <id>")
+			return 2
+		}
+		n, err := st.DeleteRule(args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Printf("rule %s removed; %d finding(s) reopened\n", args[1], n)
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "usage: secscan rules [list | add ... | rm <id>]")
+	return 2
+}

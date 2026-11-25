@@ -26,12 +26,13 @@ import (
 // layer: an accepted risk with no stated reason is indistinguishable from an
 // ignored one, and one with no expiry is forever.
 type Suppression struct {
-	FindingID string    `json:"finding_id"`
-	Reason    string    `json:"reason"`
-	Until     time.Time `json:"until"`
-	By        string    `json:"by"`
-	Role      string    `json:"role"`
-	At        time.Time `json:"at"`
+	FindingID string               `json:"finding_id"`
+	Kind      finding.SuppressKind `json:"kind,omitempty"`
+	Reason    string               `json:"reason"`
+	Until     time.Time            `json:"until"`
+	By        string               `json:"by"`
+	Role      string               `json:"role"`
+	At        time.Time            `json:"at"`
 }
 
 // ScanSummary is one history row.
@@ -62,6 +63,7 @@ type state struct {
 	Assets       map[string]finding.Asset   `json:"assets"`
 	Findings     map[string]finding.Finding `json:"findings"`
 	Suppressions map[string]Suppression     `json:"suppressions"`
+	Rules        []Rule                     `json:"rules,omitempty"`
 	Targets      []exec.Target              `json:"targets"`
 	Features     feature.State              `json:"features"`
 	// Transcripts hold the LAST scan's command log per asset. Only the latest
@@ -133,46 +135,72 @@ func (s *Store) save() error {
 //
 // Identity is the fingerprint, so a finding keeps FirstSeen across scans and
 // "new since last scan" stays meaningful. Findings previously open for this
-// asset that this scan did not re-observe are marked fixed — but only for
-// collectors that actually ran, otherwise a skipped collector would silently
-// "fix" everything it used to report.
-func (s *Store) Merge(asset finding.Asset, found []finding.Finding, ranCollectors map[string]bool) (newN, fixedN int, err error) {
+// asset that this scan did not re-observe are marked fixed — but only where
+// cov says the producer ran and looked, otherwise a skipped collector (or an
+// image beyond trivy-image's cap) would silently "fix" everything it used to
+// report. Until 2026-11 this was keyed on collectors alone, so findings from
+// external engines (trivy, gitleaks, ...) could never be closed at all.
+func (s *Store) Merge(asset finding.Asset, found []finding.Finding, cov Coverage) (newN, fixedN int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := clock.Now()
 	seen := map[string]bool{}
-	for _, f := range found {
+	// Index, not range copy: the caller's slice is updated in place so the
+	// scan summary and score count what the store now says is open, not what
+	// the scanner saw before suppressions were applied.
+	for i := range found {
+		f := &found[i]
 		seen[f.ID] = true
 		if prev, ok := s.st.Findings[f.ID]; ok {
 			f.FirstSeen = prev.FirstSeen
 			f.Occurrences = prev.Occurrences + 1
-			// A suppression survives rescans until it expires.
-			if prev.Status == finding.StatusSuppressed && clock.Now().Before(derefTime(prev.SuppressUntil)) {
+			// A per-finding suppression survives rescans until it expires.
+			// A rule's survives only while the rule exists: revoking it must
+			// win even if the finding still carries the old expiry.
+			if prev.Status == finding.StatusSuppressed && now.Before(derefTime(prev.SuppressUntil)) &&
+				(prev.SuppressRule == "" || s.ruleExists(prev.SuppressRule)) {
 				f.Status = finding.StatusSuppressed
+				f.SuppressKind = prev.SuppressKind
 				f.SuppressReason = prev.SuppressReason
 				f.SuppressUntil = prev.SuppressUntil
+				f.SuppressRule = prev.SuppressRule
 			}
 		} else {
 			newN++
 		}
-		s.st.Findings[f.ID] = f
+		if f.Status == finding.StatusOpen {
+			if r, ok := s.firstRule(*f, now); ok {
+				applyRule(f, r)
+			}
+		}
+		s.st.Findings[f.ID] = *f
 	}
 
 	for id, prev := range s.st.Findings {
 		if prev.AssetID != asset.ID || seen[id] || prev.Status == finding.StatusFixed {
 			continue
 		}
-		if !ranCollectors[prev.Engine] {
-			continue // collector didn't run — absence proves nothing
+		if !cov.covers(prev.Engine, prev.Location) {
+			continue // producer didn't run, or didn't look there — absence proves nothing
 		}
 		prev.Status = finding.StatusFixed
-		prev.LastSeen = clock.Now()
+		prev.LastSeen = now
 		s.st.Findings[id] = prev
 		fixedN++
 	}
 
 	s.st.Assets[asset.ID] = asset
 	return newN, fixedN, s.save()
+}
+
+func (s *Store) ruleExists(id string) bool {
+	for _, r := range s.st.Rules {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // AppendHistory adds one scan summary to the append-only log.
@@ -294,7 +322,10 @@ func (s *Store) Get(id string) (finding.Finding, bool) {
 }
 
 // Suppress accepts a risk, recording who did it and under which role.
-func (s *Store) Suppress(id, reason string, until time.Time, by, role string) error {
+func (s *Store) Suppress(id string, kind finding.SuppressKind, reason string, until time.Time, by, role string) error {
+	if !kind.Valid() {
+		return fmt.Errorf("kind must be %q or %q", finding.KindAcceptedRisk, finding.KindFalsePositive)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, ok := s.st.Findings[id]
@@ -302,11 +333,13 @@ func (s *Store) Suppress(id, reason string, until time.Time, by, role string) er
 		return fmt.Errorf("finding %s not found", id)
 	}
 	f.Status = finding.StatusSuppressed
+	f.SuppressKind = kind
 	f.SuppressReason = reason
 	f.SuppressUntil = &until
+	f.SuppressRule = ""
 	s.st.Findings[id] = f
 	s.st.Suppressions[id] = Suppression{
-		FindingID: id, Reason: reason, Until: until,
+		FindingID: id, Kind: kind, Reason: reason, Until: until,
 		By: by, Role: role, At: clock.Now(),
 	}
 	return s.save()

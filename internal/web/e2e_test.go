@@ -105,13 +105,7 @@ func (e *e2e) seedScan() {
 	if err != nil {
 		e.t.Fatalf("scan: %v", err)
 	}
-	ran := map[string]bool{}
-	for _, c := range res.Collectors {
-		if c.Ran {
-			ran[c.ID] = true
-		}
-	}
-	if _, _, err := e.srv.store.Merge(res.Asset, res.Findings, ran); err != nil {
+	if _, _, err := e.srv.store.Merge(res.Asset, res.Findings, scan.CoverageOf(res)); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := e.srv.store.AppendHistory(scan.Summarise(res, len(res.Findings), 0)); err != nil {
@@ -302,6 +296,61 @@ func TestE2E_FullJourney(t *testing.T) {
 				t.Error("suppressed finding still in the default list — " +
 					"an accepted risk must stop dominating the dashboard")
 			}
+		}
+	})
+
+	t.Run("false positive: mark, revoke, and refuse a bad kind", func(t *testing.T) {
+		// findingID is suppressed as an accepted risk above; revoke it first.
+		if code, body := e.do("POST", "/api/findings/"+findingID+"/unsuppress", nil); code != 200 {
+			t.Fatalf("unsuppress: %d %v", code, body)
+		}
+		if code, _ := e.do("POST", "/api/findings/"+findingID+"/suppress",
+			map[string]any{"kind": "ignore", "reason": "x", "days": 7}); code != 400 {
+			t.Errorf("unknown kind accepted (%d)", code)
+		}
+		if code, _ := e.do("POST", "/api/findings/"+findingID+"/suppress",
+			map[string]any{"kind": "false_positive", "reason": "scanner matched the wrong package", "days": 90}); code != 200 {
+			t.Fatalf("false positive rejected (%d)", code)
+		}
+		_, body := e.do("GET", "/api/findings/"+findingID, nil)
+		f := body["data"].(map[string]any)["finding"].(map[string]any)
+		if f["suppress_kind"] != "false_positive" {
+			t.Errorf("suppress_kind = %v, want false_positive", f["suppress_kind"])
+		}
+		if code, _ := e.do("POST", "/api/findings/"+findingID+"/unsuppress", nil); code != 200 {
+			t.Errorf("revoking the false positive failed (%d)", code)
+		}
+	})
+
+	t.Run("rules: too-broad refused, create applies, delete reopens", func(t *testing.T) {
+		if code, _ := e.do("POST", "/api/rules", map[string]any{
+			"kind": "false_positive", "reason": "x", "days": 30,
+			"match": map[string]any{"engine": "sshd"}}); code != 400 {
+			t.Errorf("engine-only rule accepted (%d) — it would hide everything one tool says", code)
+		}
+		_, body := e.do("GET", "/api/findings/"+findingID, nil)
+		ruleID := body["data"].(map[string]any)["finding"].(map[string]any)["rule_id"].(string)
+		code, body := e.do("POST", "/api/rules", map[string]any{
+			"kind": "false_positive", "reason": "not applicable on this host", "days": 30,
+			"match": map[string]any{"rule_id": ruleID}})
+		if code != 200 {
+			t.Fatalf("create rule: %d %v", code, body)
+		}
+		data := body["data"].(map[string]any)
+		if data["suppressed"].(float64) < 1 {
+			t.Errorf("rule suppressed %v findings, want >= 1", data["suppressed"])
+		}
+		id := data["rule"].(map[string]any)["id"].(string)
+		if code, _ := e.do("POST", "/api/findings/"+findingID+"/unsuppress", nil); code != 409 {
+			t.Errorf("unsuppressing a rule-held finding gave %d, want 409 — it would come back next scan", code)
+		}
+		_, body = e.do("GET", "/api/rules", nil)
+		if len(body["data"].([]any)) != 1 {
+			t.Errorf("GET /api/rules = %v", body["data"])
+		}
+		code, body = e.do("DELETE", "/api/rules/"+id, nil)
+		if code != 200 || body["data"].(map[string]any)["reopened"].(float64) < 1 {
+			t.Errorf("delete rule: %d %v", code, body)
 		}
 	})
 

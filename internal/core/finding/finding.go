@@ -113,6 +113,20 @@ const (
 	StatusFixed      Status = "fixed"
 )
 
+// SuppressKind says WHY a finding is suppressed. The two are kept apart because
+// they mean opposite things to whoever reads the report later: an accepted risk
+// is a real problem someone chose to live with, a false positive is a claim the
+// scanner got wrong. Mixing them hides the first and lets the second rot.
+type SuppressKind string
+
+const (
+	KindAcceptedRisk  SuppressKind = "accepted_risk"
+	KindFalsePositive SuppressKind = "false_positive"
+)
+
+// Valid reports whether k is a known kind.
+func (k SuppressKind) Valid() bool { return k == KindAcceptedRisk || k == KindFalsePositive }
+
 // Provenance states how a surface came by its data. Nothing may present demo
 // or stale data as live (ARCHITECTURE.md — Provenance and honest degradation).
 type Provenance string
@@ -221,9 +235,13 @@ type Finding struct {
 	Remediation Remediation `json:"remediation"`
 	References  []string    `json:"references,omitempty"`
 
-	Status         Status     `json:"status"`
-	SuppressReason string     `json:"suppress_reason,omitempty"`
-	SuppressUntil  *time.Time `json:"suppress_until,omitempty"`
+	Status         Status       `json:"status"`
+	SuppressReason string       `json:"suppress_reason,omitempty"`
+	SuppressUntil  *time.Time   `json:"suppress_until,omitempty"`
+	SuppressKind   SuppressKind `json:"suppress_kind,omitempty"`
+	// SuppressRule is set when a match rule, not a per-finding decision,
+	// suppressed this finding; revoking the rule reopens it.
+	SuppressRule string `json:"suppress_rule,omitempty"`
 
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`

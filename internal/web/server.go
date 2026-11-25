@@ -193,6 +193,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/audit", s.Guard(rbac.CapAuditRead, s.handleAudit))
 	// cap:finding.suppress
 	s.mux.HandleFunc("POST /api/findings/{id}/suppress", s.Guard(rbac.CapFindingSuppress, s.handleSuppress))
+	// cap:finding.suppress
+	s.mux.HandleFunc("POST /api/findings/{id}/unsuppress", s.Guard(rbac.CapFindingSuppress, s.handleUnsuppress))
+	// cap:finding.read
+	s.mux.HandleFunc("GET /api/rules", s.Guard(rbac.CapFindingRead, s.handleRules))
+	// cap:finding.suppress
+	s.mux.HandleFunc("POST /api/rules", s.Guard(rbac.CapFindingSuppress, s.handleRuleCreate))
+	// cap:finding.suppress
+	s.mux.HandleFunc("DELETE /api/rules/{id}", s.Guard(rbac.CapFindingSuppress, s.handleRuleDelete))
 	// cap:finding.read
 	s.mux.HandleFunc("GET /api/findings/{id}/remediate", s.Guard(rbac.CapFindingRead, s.handleRemediatePlan))
 	// cap:remediate.apply
@@ -478,17 +486,25 @@ func (s *Server) handleSuppress(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var body struct {
-		Reason string `json:"reason"`
-		Days   int    `json:"days"`
+		Kind   finding.SuppressKind `json:"kind"`
+		Reason string               `json:"reason"`
+		Days   int                  `json:"days"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
-		writeErr(w, apierr.BadRequest, "body must be JSON {reason, days}")
+		writeErr(w, apierr.BadRequest, "body must be JSON {kind, reason, days}")
+		return
+	}
+	if body.Kind == "" {
+		body.Kind = finding.KindAcceptedRisk // the only kind before false positives existed
+	}
+	if !body.Kind.Valid() {
+		writeErr(w, apierr.BadRequest, "kind must be accepted_risk or false_positive")
 		return
 	}
 	// A reason and an expiry are mandatory: an accepted risk with neither is
 	// indistinguishable from an ignored one.
 	if strings.TrimSpace(body.Reason) == "" {
-		writeErr(w, apierr.BadRequest, "a reason is required to accept a risk")
+		writeErr(w, apierr.BadRequest, "a reason is required to suppress a finding")
 		return
 	}
 	if body.Days <= 0 || body.Days > 365 {
@@ -497,17 +513,17 @@ func (s *Server) handleSuppress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	until := clock.Now().AddDate(0, 0, body.Days)
-	if err := s.store.Suppress(id, body.Reason, until, p.Email, string(p.Role)); err != nil {
+	if err := s.store.Suppress(id, body.Kind, body.Reason, until, p.Email, string(p.Role)); err != nil {
 		writeErr(w, apierr.NotFound, err.Error())
 		return
 	}
 	s.audit.Write(audit.Entry{
 		Caller: p.Email, Role: string(p.Role), Action: "finding.suppress",
 		Target: id, Result: "allowed",
-		Detail:   fmt.Sprintf("until %s: %s", until.Format(time.DateOnly), body.Reason),
+		Detail:   fmt.Sprintf("%s until %s: %s", body.Kind, until.Format(time.DateOnly), body.Reason),
 		RemoteIP: peerIP(r),
 	})
-	writeData(w, map[string]any{"id": id, "until": until}, finding.ProvLive, "")
+	writeData(w, map[string]any{"id": id, "kind": body.Kind, "until": until}, finding.ProvLive, "")
 }
 
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {

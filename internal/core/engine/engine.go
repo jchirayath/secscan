@@ -9,7 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/jchirayath/secscan/internal/clock"
 	"github.com/jchirayath/secscan/internal/core/exec"
@@ -24,6 +27,17 @@ type Status struct {
 	Found     int    `json:"found"`
 	Reason    string `json:"reason,omitempty"`
 	Install   string `json:"install,omitempty"` // how to get it
+	// NotCovered lists locations the engine is responsible for but did not
+	// examine on this run (images past trivy-image's cap, images that failed
+	// to scan). The store keeps their findings open instead of calling them
+	// fixed — see store.Coverage.
+	NotCovered []string `json:"not_covered,omitempty"`
+}
+
+// PartialEngine is implemented by engines that may skip part of what they are
+// responsible for on a run, and can say which part.
+type PartialEngine interface {
+	RunPartial(ctx context.Context, r exec.Runner, a *finding.Asset) (fs []finding.Finding, notCovered []string, err error)
 }
 
 // Enablement answers whether a feature should run. Defined here as a narrow
@@ -94,13 +108,22 @@ func RunAll(ctx context.Context, r exec.Runner, a *finding.Asset, enabled Enable
 			continue
 		}
 		st.Installed = true
-		fs, err := e.Run(ctx, r, a)
+		var (
+			fs      []finding.Finding
+			skipped []string
+			err     error
+		)
+		if pe, ok := e.(PartialEngine); ok {
+			fs, skipped, err = pe.RunPartial(ctx, r, a)
+		} else {
+			fs, err = e.Run(ctx, r, a)
+		}
 		if err != nil {
 			st.Reason = "engine failed: " + err.Error()
 			statuses = append(statuses, st)
 			continue
 		}
-		st.Ran, st.Found = true, len(fs)
+		st.Ran, st.Found, st.NotCovered = true, len(fs), skipped
 		out = append(out, fs...)
 		statuses = append(statuses, st)
 	}
@@ -185,8 +208,29 @@ func (t Trivy) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]find
 	// binary, so a single kernel issue can appear a dozen times with identical
 	// text. Collapse on CVE+package: the operator fixes it once.
 	seen := map[string]bool{}
+	running := kernelABI(a.Kernel)
+	stale := map[string]*staleKernel{}
 	for _, result := range rep.Results {
 		for _, v := range result.Vulnerabilities {
+			// Packages of a kernel that is installed but NOT running (the one
+			// apt keeps as a fallback after an upgrade) are folded into one
+			// finding per kernel — see staleKernelFinding.
+			if abi := kernelABI(v.PkgName); running != "" && abi != "" && abi != running &&
+				strings.HasPrefix(strings.ToLower(v.PkgName), "linux-") {
+				sk := stale[abi]
+				if sk == nil {
+					sk = &staleKernel{abi: abi, target: result.Target, typ: result.Type,
+						pkgs: map[string]bool{}, cves: map[string]bool{}}
+					stale[abi] = sk
+				}
+				sk.pkgs[v.PkgName], sk.cves[v.VulnerabilityID] = true, true
+				for _, c := range v.CVSS {
+					if c.V3Score > sk.maxCVSS {
+						sk.maxCVSS = c.V3Score
+					}
+				}
+				continue
+			}
 			key := v.VulnerabilityID + "|" + v.PkgName
 			if seen[key] {
 				continue
@@ -228,7 +272,80 @@ func (t Trivy) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]find
 			out = append(out, f.WithLocation(result.Target, comp))
 		}
 	}
+	abis := make([]string, 0, len(stale))
+	for abi := range stale {
+		abis = append(abis, abi)
+	}
+	sort.Strings(abis)
+	for _, abi := range abis {
+		out = append(out, staleKernelFinding(a, now, res.Command, running, stale[abi]))
+	}
 	return out, nil
+}
+
+// kernelABIRe pulls the kernel ABI ("7.0.0-1017") out of a package name or a
+// `uname -r` string: linux-modules-7.0.0-1017-azure,
+// linux-azure-7.0-tools-7.0.0-1017, 7.0.0-1020-azure. Three dotted parts and
+// a dash are required so "linux-azure-7.0-tools" alone does not match.
+var kernelABIRe = regexp.MustCompile(`\d+\.\d+\.\d+-\d+`)
+
+func kernelABI(s string) string { return kernelABIRe.FindString(s) }
+
+type staleKernel struct {
+	abi, target, typ string
+	pkgs, cves       map[string]bool
+	maxCVSS          float64
+}
+
+// staleKernelFinding reports an installed-but-not-running kernel as ONE
+// finding instead of one per CVE per package.
+//
+// Trivy rates every CVE in every package of the old kernel as if it were live:
+// on betty, after a routine kernel upgrade, that was 787 CVEs × 7 packages =
+// 5,509 HIGH findings, 82% of everything open, for code that was not executing.
+// A container-scale problem gets a container-scale fix elsewhere in this
+// package; this is the host equivalent.
+//
+// Not dropped and not informational: the kernel can still be booted (GRUB
+// keeps it as the fallback entry, and an operator can pick it), so the CVEs
+// are dormant rather than absent. Rated LOW, with the CVE list kept as
+// evidence and the one action that clears all of them as the remediation.
+func staleKernelFinding(a *finding.Asset, now time.Time, cmd, running string, sk *staleKernel) finding.Finding {
+	pkgs := sortedKeys(sk.pkgs)
+	cves := sortedKeys(sk.cves)
+	f := finding.New(a.ID, categoryForTrivy(sk.typ), finding.SevLow, "kernel.stale-installed",
+		fmt.Sprintf("Old kernel %s is still installed (not running): %d fixable CVEs", sk.abi, len(cves)), now)
+	f.Subcategory = sk.typ
+	f.Engine = "trivy"
+	f.CVE = cves
+	f.CVSS = sk.maxCVSS
+	f.Description = fmt.Sprintf("This host runs kernel %s. Kernel %s is still installed — usually kept "+
+		"by apt as a boot fallback after an upgrade — and Trivy reports %d CVEs across its %d packages "+
+		"(highest CVSS %.1f). None of that code runs unless the machine is booted into %s, so these are "+
+		"dormant, not exposed. Removing the old kernel clears all of them at once.",
+		running, sk.abi, len(cves), len(pkgs), sk.maxCVSS, sk.abi)
+	shown := cves
+	if len(shown) > 25 {
+		shown = shown[:25]
+	}
+	f.Evidence = []finding.Evidence{{
+		Command: cmd,
+		Output: fmt.Sprintf("running %s; installed %s packages: %s\n%d CVEs, e.g. %s",
+			running, sk.abi, strings.Join(pkgs, " "), len(cves), strings.Join(shown, " ")),
+	}}
+	f.Remediation = finding.Remediation{Op: "manual",
+		Summary: fmt.Sprintf("Remove kernel %s once %s has booted cleanly: sudo apt purge %s (or sudo apt autoremove --purge)",
+			sk.abi, running, strings.Join(pkgs, " "))}
+	return f.WithLocation(sk.target, finding.Component{Name: "linux kernel " + sk.abi, Version: sk.abi})
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func categoryForTrivy(typ string) finding.Category {

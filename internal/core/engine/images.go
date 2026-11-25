@@ -51,6 +51,14 @@ func (TrivyImage) InstallHint() string {
 const maxImages = 10
 
 func (t TrivyImage) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, error) {
+	fs, _, err := t.RunPartial(ctx, r, a)
+	return fs, err
+}
+
+// RunPartial is Run plus the running images it did not get to (past the cap)
+// or could not read, so the store keeps those images' findings open rather
+// than declaring them fixed.
+func (t TrivyImage) RunPartial(ctx context.Context, r exec.Runner, a *finding.Asset) ([]finding.Finding, []string, error) {
 	now := clock.Now()
 
 	// Both dependencies fail as errors rather than as an empty result, so
@@ -58,14 +66,14 @@ func (t TrivyImage) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 	// engine that never obtained a container list is a lie the operator has no
 	// way to detect.
 	if !r.Has(ctx, "docker") {
-		return nil, fmt.Errorf("docker is not installed on the target, so no running images could be enumerated")
+		return nil, nil, fmt.Errorf("docker is not installed on the target, so no running images could be enumerated")
 	}
 	ps := r.Run(ctx, "docker", "ps", "-q")
 	if ps.Err != nil {
-		return nil, ps.Err
+		return nil, nil, ps.Err
 	}
 	if !ps.OK() {
-		return nil, fmt.Errorf("docker is present but not queryable (daemon down, or the scan account lacks socket access): %s",
+		return nil, nil, fmt.Errorf("docker is present but not queryable (daemon down, or the scan account lacks socket access): %s",
 			firstLine(ps.Stderr))
 	}
 
@@ -80,12 +88,14 @@ func (t TrivyImage) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 	// times the runtime for identical output.
 	images := resolveImages(ctx, r, ps.Stdout)
 	if len(images) == 0 {
-		return nil, nil // nothing running — a real, honest zero
+		return nil, nil, nil // nothing running — a real, honest zero
 	}
 
 	var out []finding.Finding
 	scanned := images
+	var notCovered []string
 	if len(scanned) > maxImages {
+		notCovered = append(notCovered, images[maxImages:]...)
 		scanned = scanned[:maxImages]
 		out = append(out, coverageNote(a, now, images, scanned))
 	}
@@ -98,6 +108,7 @@ func (t TrivyImage) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 			// nine — but it must not vanish either, so it is collected here and
 			// reported as its own finding below.
 			failed = append(failed, fmt.Sprintf("%s — %v", img, err))
+			notCovered = append(notCovered, img)
 			continue
 		}
 		out = append(out, fs...)
@@ -105,7 +116,7 @@ func (t TrivyImage) Run(ctx context.Context, r exec.Runner, a *finding.Asset) ([
 	if len(failed) > 0 {
 		out = append(out, failureNote(a, now, failed))
 	}
-	return out, nil
+	return out, notCovered, nil
 }
 
 // scanImage runs Trivy against one image and converts the report to findings.

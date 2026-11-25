@@ -615,14 +615,27 @@ async function viewFinding(id) {
       ${refs ? `<section><h4>References</h4><ul>${refs}</ul></section>` : ''}
 
       ${canSuppress && f.status === 'open'
-        ? `<section><button class="ghost" id="suppress">Accept this risk…</button></section>` : ''}
+        ? `<section class="row">
+             <button class="ghost" id="markFP">Mark false positive…</button>
+             <button class="ghost" id="suppress">Accept this risk…</button>
+           </section>` : ''}
       ${f.status === 'suppressed'
-        ? `<section><p class="muted">Accepted: ${esc(f.suppress_reason)}
-           (until ${esc((f.suppress_until || '').slice(0, 10))})</p></section>` : ''}
+        ? `<section><p class="muted">${f.suppress_kind === 'false_positive' ? 'False positive' : 'Accepted risk'}:
+             ${esc(f.suppress_reason)} (until ${esc((f.suppress_until || '').slice(0, 10))})
+             ${f.suppress_rule ? ` — by rule <a href="#view=suppressions">${esc(f.suppress_rule)}</a>` : ''}</p>
+           ${canSuppress && !f.suppress_rule ? '<button class="ghost" id="unsuppress">Revoke</button>' : ''}
+           </section>` : ''}
     </div>`;
 
   document.getElementById('back').addEventListener('click', () => history.back());
-  document.getElementById('suppress')?.addEventListener('click', () => openSuppress(f.id));
+  document.getElementById('suppress')?.addEventListener('click', () => openSuppress(f, 'accepted_risk'));
+  document.getElementById('markFP')?.addEventListener('click', () => openSuppress(f, 'false_positive'));
+  document.getElementById('unsuppress')?.addEventListener('click', async () => {
+    try {
+      await api(`/api/findings/${encodeURIComponent(f.id)}/unsuppress`, { method: 'POST' });
+      viewFinding(f.id);
+    } catch (e) { alert('Could not revoke: ' + e.message); }
+  });
   renderChangeRisk(f);
 }
 
@@ -731,27 +744,107 @@ function renderFixResult(res, dryRun) {
 
 /* -------------------------------------------------------------- suppress */
 
-function openSuppress(id) {
+// suppressScopes lists what a suppression can cover, narrowest first. Anything
+// broader than "this finding" becomes a rule, which also covers future scans —
+// the only way a false positive survives the next package version bump.
+function suppressScopes(f) {
+  const out = [['finding', 'This finding only', null]];
+  if (f.rule_id) {
+    out.push(['rule', `Every finding of ${f.rule_id}`, { rule_id: f.rule_id, asset_id: f.asset_id }]);
+  }
+  const comp = f.component && f.component.name;
+  if (comp) {
+    out.push(['component', `Everything ${f.engine} reports in ${comp}`, { component: comp, engine: f.engine, asset_id: f.asset_id }]);
+  }
+  if (f.location) {
+    out.push(['location', `Everything ${f.engine} reports at ${f.location}`, { location: f.location, engine: f.engine, asset_id: f.asset_id }]);
+    const slash = f.location.lastIndexOf('/');
+    if (slash > 0) {
+      const dir = f.location.slice(0, slash + 1);
+      out.push(['folder', `Everything ${f.engine} reports under ${dir}`, { location: dir + '*', engine: f.engine, asset_id: f.asset_id }]);
+    }
+  }
+  return out;
+}
+
+function openSuppress(f, kind) {
   const dlg = document.getElementById('suppressDlg');
   const reason = document.getElementById('supReason');
+  const kindSel = document.getElementById('supKind');
+  const scopeSel = document.getElementById('supScope');
+  const scopes = suppressScopes(f);
   reason.value = '';
+  kindSel.value = kind;
+  scopeSel.innerHTML = scopes.map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('');
+  const sync = () => {
+    document.getElementById('supTitle').textContent =
+      kindSel.value === 'false_positive' ? 'Mark as false positive' : 'Accept this risk';
+  };
+  kindSel.onchange = sync;
+  sync();
   dlg.showModal();
 
   document.getElementById('supCancel').onclick = () => dlg.close();
   document.getElementById('supOk').onclick = async () => {
     const days = parseInt(document.getElementById('supDays').value, 10);
     if (!reason.value.trim()) { reason.focus(); return; }
+    const scope = scopes.find((x) => x[0] === scopeSel.value);
     try {
-      await api(`/api/findings/${encodeURIComponent(id)}/suppress`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: reason.value.trim(), days }),
-      });
+      if (!scope[2]) {
+        await api(`/api/findings/${encodeURIComponent(f.id)}/suppress`, {
+          method: 'POST',
+          body: JSON.stringify({ kind: kindSel.value, reason: reason.value.trim(), days }),
+        });
+      } else {
+        const r = await api('/api/rules', {
+          method: 'POST',
+          body: JSON.stringify({ kind: kindSel.value, reason: reason.value.trim(), days, match: scope[2] }),
+        });
+        alert(`Rule ${r.data.rule.id} created — ${r.data.suppressed} finding(s) suppressed now, and future scans will match it too.`);
+      }
       dlg.close();
-      viewFinding(id);
+      viewFinding(f.id);
     } catch (e) {
-      alert('Could not accept risk: ' + e.message);
+      alert('Could not suppress: ' + e.message);
     }
   };
+}
+
+/* ----------------------------------------------------------- suppressions */
+
+async function viewSuppressions() {
+  renderLoading('suppression rules');
+  let body;
+  try { body = await api('/api/rules'); }
+  catch (e) { return renderError(e, 'the suppression rules'); }
+  const canSuppress = (state.me?.capabilities || []).includes('finding.suppress');
+  const rules = body.data || [];
+  const matchText = (m) => Object.entries(m || {}).filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${v}`).join(' · ');
+  app.innerHTML = `
+    <h1 class="page">Suppressions</h1>
+    <p class="sub">Rules hide every finding they match, now and in future scans. False positives
+       say the scanner was wrong; accepted risks say the problem is real and tolerated. Both expire.
+       Single-finding suppressions are shown on the finding itself.</p>
+    ${rules.length ? `<div class="card"><table>
+      <thead><tr><th>Kind</th><th>Match</th><th>Reason</th><th>Hiding</th><th>Until</th><th>By</th><th></th></tr></thead>
+      <tbody>${rules.map((r) => `<tr>
+        <td><span class="badge ${r.kind === 'false_positive' ? 'low' : 'medium'}">${r.kind === 'false_positive' ? 'false positive' : 'accepted risk'}</span></td>
+        <td class="mono fs-12">${esc(matchText(r.match))}</td>
+        <td>${esc(r.reason)}</td>
+        <td>${r.suppressed}</td>
+        <td>${r.expired ? '<span class="badge critical">expired</span>' : esc((r.until || '').slice(0, 10))}</td>
+        <td class="muted">${esc(r.by || '')}</td>
+        <td>${canSuppress ? `<button class="ghost" data-revoke="${esc(r.id)}">Revoke</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty"><h3>No rules</h3><p>Create one from a finding: Mark false positive… → Applies to.</p></div>'}`;
+  app.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Revoke this rule? The findings it hides reopen.')) return;
+    try {
+      await api(`/api/rules/${encodeURIComponent(b.dataset.revoke)}`, { method: 'DELETE' });
+      viewSuppressions();
+    } catch (e) { alert('Could not revoke: ' + e.message); }
+  }));
 }
 
 /* ------------------------------------------------------------------ plan */
@@ -1101,6 +1194,7 @@ const VIEWS = [
   ['trend', 'Trend', viewTrend],
   ['coverage', 'Checks & results', viewCoverage],
   ['checks', 'Checks', viewFeatures],
+  ['suppressions', 'Suppressions', viewSuppressions],
   ['audit', 'Audit', viewAudit],
 ];
 

@@ -453,3 +453,24 @@ func PlanScript(actions []Action, assetName string) string {
 	}
 	return s
 }
+
+// CoverageOf tells the store what this scan actually looked at: every
+// collector and engine that ran, with the locations a partial engine skipped.
+// Both the CLI and the server merge through this, so they close findings by
+// the same rule. Engines were missing from the earlier version of this
+// (collectors only), which meant no Trivy or Gitleaks finding could ever be
+// marked fixed — on betty, 837 findings for images and packages long gone.
+func CoverageOf(res Result) store.Coverage {
+	cov := store.Coverage{}
+	for _, c := range res.Collectors {
+		if c.Ran {
+			cov[c.ID] = nil
+		}
+	}
+	for _, e := range res.Engines {
+		if e.Ran {
+			cov[e.ID] = e.NotCovered
+		}
+	}
+	return cov
+}

@@ -57,13 +57,7 @@ func (s *Server) runScan(ctx context.Context, t exec.Target) (scan.Result, store
 	if err != nil {
 		return res, store.ScanSummary{}, err
 	}
-	ran := map[string]bool{}
-	for _, c := range res.Collectors {
-		if c.Ran {
-			ran[c.ID] = true
-		}
-	}
-	newN, fixedN, err := s.store.Merge(res.Asset, res.Findings, ran)
+	newN, fixedN, err := s.store.Merge(res.Asset, res.Findings, scan.CoverageOf(res))
 	if err != nil {
 		return res, store.ScanSummary{}, storeError{err}
 	}
