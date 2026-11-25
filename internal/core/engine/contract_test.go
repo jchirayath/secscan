@@ -162,8 +162,7 @@ func TestContractOSVScanner(t *testing.T) {
   "name": "contract", "version": "1.0.0", "lockfileVersion": 3, "requires": true,
   "packages": {
     "": {"name": "contract", "version": "1.0.0", "dependencies": {"lodash": "`+vulnLodash+`"}},
-    "node_modules/lodash": {"version": "`+vulnLodash+`",
-      "resolved": "https://registry.npmjs.org/lodash/-/lodash-`+vulnLodash+`.tgz"}
+    "node_modules/lodash": {"version": "`+vulnLodash+`"}
   }
 }`)
 	r := contractRunner("", func(argv []string) []string {
