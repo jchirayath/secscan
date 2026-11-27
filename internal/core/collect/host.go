@@ -207,9 +207,8 @@ func (p Packages) Collect(ctx context.Context, r exec.Runner, a *finding.Asset) 
 }
 
 func unattendedUpgrades(ctx context.Context, r exec.Runner, a *finding.Asset, engine string, t time.Time) []finding.Finding {
-	cfg, ok := r.ReadFile(ctx, "/etc/apt/apt.conf.d/20auto-upgrades")
-	enabled := ok && strings.Contains(cfg, `"1"`)
-	if enabled {
+	cfg, ok := r.ReadFile(ctx, aptAutoUpgradesFile)
+	if ok && aptUnattendedEnabled(cfg) {
 		return nil
 	}
 	f := finding.New(a.ID, finding.CatOps, finding.SevMedium,

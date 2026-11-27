@@ -74,7 +74,10 @@ func (c ControlsCollector) Detect(ctx context.Context, r exec.Runner, a *finding
 	if ctl, ok := detectMAC(ctx, r); ok {
 		out = append(out, ctl)
 	}
-	return out, Ran(c.ID(), 4)
+	if ctl, ok := detectAutoUpdates(ctx, r); ok {
+		out = append(out, ctl)
+	}
+	return out, Ran(c.ID(), 5)
 }
 
 // ---------------------------------------------------------------- fail2ban
